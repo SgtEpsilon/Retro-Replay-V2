@@ -74,6 +74,19 @@ function loadScheduledEvents() {
   }
 }
 
+// Function to save current signups for a message
+function saveSignupsForEvent(messageId, eventTitle) {
+  const eventIndex = scheduledEvents.findIndex(e => e.title === eventTitle);
+  if (eventIndex === -1) return;
+  
+  const currentSignups = signups.get(messageId);
+  if (currentSignups) {
+    scheduledEvents[eventIndex].signups = currentSignups;
+    saveScheduledEvents();
+    console.log(`Saved signups for event: ${eventTitle}`);
+  }
+}
+
 client.once('ready', () => {
   console.log(`Logged in as ${client.user.tag}`);
   console.log('Bot is ready! Use !setup in a channel to create the reaction role message.');
@@ -125,10 +138,15 @@ function buildSignupList(messageId) {
 // Function to build custom event signup list
 function buildCustomSignupList(messageId, customRoleConfig) {
   const roleSignups = signups.get(messageId) || {};
+  return buildCustomSignupListWithData(customRoleConfig, roleSignups);
+}
+
+// Function to build custom event signup list with data
+function buildCustomSignupListWithData(customRoleConfig, signupData) {
   let signupText = '';
   
   for (const [emoji, roleName] of Object.entries(customRoleConfig)) {
-    const users = roleSignups[roleName] || [];
+    const users = signupData[roleName] || [];
     signupText += `\n**${emoji} ${roleName}:**\n`;
     
     if (users.length === 0) {
@@ -399,7 +417,10 @@ client.on('messageCreate', async (message) => {
       customRoleConfig[emojis[i]] = role;
     });
 
-    // Create embed
+    // Restore previous signups if they exist
+    const previousSignups = eventToRepost.signups || {};
+    
+    // Create embed with restored signups
     const embed = new EmbedBuilder()
       .setColor('#ff9900')
       .setTitle(`📋 ${eventToRepost.title}`)
@@ -407,7 +428,7 @@ client.on('messageCreate', async (message) => {
         `**Event Starts:** <t:${eventToRepost.timestamp}:R>\n` +
         `**Start Time:** <t:${eventToRepost.timestamp}:F>\n` +
         '═══════════════════════════\n' +
-        buildCustomSignupList(null, customRoleConfig))
+        buildCustomSignupListWithData(customRoleConfig, previousSignups))
       .setFooter({ text: 'React with the corresponding emoji to sign up!' })
       .setTimestamp();
 
@@ -424,8 +445,8 @@ client.on('messageCreate', async (message) => {
 
     const sentMessage = await targetChannel.send(messageContent);
 
-    // Initialize signup tracking
-    signups.set(sentMessage.id, {});
+    // Initialize signup tracking with previous signups
+    signups.set(sentMessage.id, JSON.parse(JSON.stringify(previousSignups))); // Deep copy
 
     // Store custom role config for this message
     if (!client.customEventRoles) {
@@ -438,17 +459,12 @@ client.on('messageCreate', async (message) => {
       await sentMessage.react(emojis[i]);
     }
 
-    // Send confirmation
-    try {
-      await message.author.send(`✅ Event "${eventToRepost.title}" reposted successfully in #shift-signup!`);
-      await message.delete();
-    } catch (error) {
-      const reply = await message.reply(`✅ Event "${eventToRepost.title}" reposted successfully in #shift-signup!`);
-      setTimeout(() => {
-        reply.delete().catch(() => {});
-        message.delete().catch(() => {});
-      }, 5000);
-    }
+    // Send confirmation and delete after 5 seconds
+    const reply = await message.reply(`✅ Event "${eventToRepost.title}" reposted successfully in #shift-signup!`);
+    setTimeout(() => {
+      reply.delete().catch(() => {});
+      message.delete().catch(() => {});
+    }, 5000);
   }
 
   // Create custom event command
@@ -569,25 +585,19 @@ client.on('messageCreate', async (message) => {
       createdById: message.author.id,
       createdAt: new Date().toISOString(),
       channelId: targetChannel.id,
-      messageId: sentMessage.id
+      messageId: sentMessage.id,
+      signups: {} // Initialize empty signups object
     };
     scheduledEvents.push(eventLog);
     saveScheduledEvents();
     console.log(`Event logged: ${title} at ${eventDate.toISOString()}`);
 
-    // Send ephemeral-style response by DMing the user
-    try {
-      await message.author.send(`✅ Event "${title}" created successfully in #shift-signup! Time is set in EST.`);
-      // Delete the command message to keep channel clean
-      await message.delete();
-    } catch (error) {
-      // If DM fails, reply normally but delete after 5 seconds
-      const reply = await message.reply(`✅ Event "${title}" created successfully in #shift-signup! Time is set in EST.`);
-      setTimeout(() => {
-        reply.delete().catch(() => {});
-        message.delete().catch(() => {});
-      }, 5000);
-    }
+    // Send confirmation and delete after 5 seconds
+    const reply = await message.reply(`✅ Event "${title}" created successfully in #shift-signup! Time is set in EST.`);
+    setTimeout(() => {
+      reply.delete().catch(() => {});
+      message.delete().catch(() => {});
+    }, 5000);
   }
 });
 
@@ -810,6 +820,13 @@ client.on('messageReactionAdd', async (reaction, user) => {
     // Update the message
     try {
       await updateSignupMessage(reaction.message);
+      
+      // Save signups to event log
+      const embed = reaction.message.embeds[0];
+      if (embed && embed.title) {
+        const eventTitle = embed.title.replace('📋 ', '');
+        saveSignupsForEvent(reaction.message.id, eventTitle);
+      }
     } catch (error) {
       console.error('Error updating message:', error);
     }
@@ -853,6 +870,13 @@ client.on('messageReactionRemove', async (reaction, user) => {
       // Update the message
       try {
         await updateSignupMessage(reaction.message);
+        
+        // Save signups to event log
+        const embed = reaction.message.embeds[0];
+        if (embed && embed.title) {
+          const eventTitle = embed.title.replace('📋 ', '');
+          saveSignupsForEvent(reaction.message.id, eventTitle);
+        }
       } catch (error) {
         console.error('Error updating message:', error);
       }
