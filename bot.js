@@ -106,7 +106,19 @@ async function createSignupEmbed(channel) {
     .setFooter({ text: 'React with the corresponding emoji to sign up!' })
     .setTimestamp();
 
-  const sentMessage = await channel.send({ embeds: [embed] });
+  // Find the @bar staff role
+  const barStaffRole = channel.guild.roles.cache.find(role => role.name.toLowerCase() === 'bar staff');
+  
+  const messageContent = {
+    embeds: [embed]
+  };
+  
+  // Add role ping if the role exists
+  if (barStaffRole) {
+    messageContent.content = `<@&${barStaffRole.id}> New signup sheet is now available!`;
+  }
+
+  const sentMessage = await channel.send(messageContent);
   
   // Initialize empty signup tracking for this message
   signups.set(sentMessage.id, {});
