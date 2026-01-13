@@ -269,15 +269,31 @@ function scheduleDailySignup() {
     const daysOfWeek = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
     const openDaysLower = config.openDays.map(d => d.toLowerCase());
     
-    // Keep advancing until we find an open day
-    while (!openDaysLower.includes(daysOfWeek[next5PM.getUTCDay()].toLowerCase())) {
+    // Keep advancing until we find an open day (max 7 days to prevent infinite loop)
+    let daysChecked = 0;
+    while (daysChecked < 7) {
+      const dayIndex = next5PM.getUTCDay();
+      const dayName = daysOfWeek[dayIndex];
+      
+      if (openDaysLower.includes(dayName.toLowerCase())) {
+        break; // Found an open day
+      }
+      
+      // Not an open day, try next day
       next5PM.setUTCDate(next5PM.getUTCDate() + 1);
       next5PM.setUTCHours(17, 0, 0, 0);
+      daysChecked++;
+    }
+    
+    if (daysChecked >= 7) {
+      console.error('No valid open days found in openDays configuration!');
+      return;
     }
     
     const timeUntil = next5PM.getTime() - now.getTime();
+    const nextDayName = daysOfWeek[next5PM.getUTCDay()];
     
-    console.log(`Next signup sheet will be posted at ${next5PM.toISOString()} (${daysOfWeek[next5PM.getUTCDay()]})`);
+    console.log(`Next signup sheet will be posted at ${next5PM.toISOString()} (${nextDayName})`);
     
     setTimeout(async () => {
       try {
@@ -320,8 +336,8 @@ client.on('messageCreate', async (message) => {
           inline: false
         },
         {
-          name: '!createevent "Title" HH:MM [YYYY-MM-DD]',
-          value: '**[Admin Only]** Creates a custom event signup.\nExample: `!createevent "Saturday Special" 22:00 2026-01-18`\nDate is optional (defaults to today). **Times are in EST.**',
+          name: '!createevent',
+          value: '**[Admin Only]** Opens a form to create a custom event signup.\nClick the button and fill in the event details (title, time, date).\n**Times are in EST.**',
           inline: false
         },
         {
@@ -605,6 +621,167 @@ client.on('messageCreate', async (message) => {
 
     // Just delete the command message
     await message.delete().catch(() => {});
+  }
+});
+
+// Handle button and modal interactions
+client.on('interactionCreate', async (interaction) => {
+  try {
+    if (!interaction.isButton() && !interaction.isModalSubmit()) return;
+
+    // Open event creation form
+    if (interaction.isButton() && interaction.customId === 'open_event_form') {
+      const modal = new ModalBuilder()
+        .setCustomId('event_form')
+        .setTitle('Create Custom Event Signup');
+
+      const eventTitle = new TextInputBuilder()
+        .setCustomId('event_title')
+        .setLabel('Event Title')
+        .setPlaceholder('e.g., Saturday Special')
+        .setStyle(TextInputStyle.Short)
+        .setRequired(true);
+
+      const eventTime = new TextInputBuilder()
+        .setCustomId('event_time')
+        .setLabel('Event Start Time (HH:MM in EST)')
+        .setPlaceholder('22:00')
+        .setStyle(TextInputStyle.Short)
+        .setRequired(true);
+
+      const eventDate = new TextInputBuilder()
+        .setCustomId('event_date')
+        .setLabel('Event Date (YYYY-MM-DD, leave blank for today)')
+        .setPlaceholder('2026-01-18')
+        .setStyle(TextInputStyle.Short)
+        .setRequired(false);
+
+      const row1 = new ActionRowBuilder().addComponents(eventTitle);
+      const row2 = new ActionRowBuilder().addComponents(eventTime);
+      const row3 = new ActionRowBuilder().addComponents(eventDate);
+
+      modal.addComponents(row1, row2, row3);
+
+      await interaction.showModal(modal);
+    }
+
+    // Handle form submission
+    if (interaction.isModalSubmit() && interaction.customId === 'event_form') {
+      const title = interaction.fields.getTextInputValue('event_title');
+      const timeText = interaction.fields.getTextInputValue('event_time');
+      const dateText = interaction.fields.getTextInputValue('event_date') || '';
+
+      // Find the shift-signup channel
+      let targetChannel = interaction.guild.channels.cache.find(ch => ch.name === 'shift-signup');
+      
+      if (!targetChannel) {
+        return interaction.reply({ content: '❌ Could not find the #shift-signup channel. Please create it first.', ephemeral: true });
+      }
+
+      // Parse time
+      const timeMatch = timeText.match(/^(\d{1,2}):(\d{2})$/);
+      if (!timeMatch) {
+        return interaction.reply({ content: 'Invalid time format! Use HH:MM (e.g., 21:00)', ephemeral: true });
+      }
+
+      const hours = parseInt(timeMatch[1]);
+      const minutes = parseInt(timeMatch[2]);
+
+      if (hours < 0 || hours > 23 || minutes < 0 || minutes > 59) {
+        return interaction.reply({ content: 'Invalid time! Hours must be 0-23, minutes 0-59', ephemeral: true });
+      }
+
+      // Calculate event timestamp in EST (UTC-5)
+      let eventDate = new Date();
+      
+      if (dateText) {
+        const dateMatch = dateText.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+        if (!dateMatch) {
+          return interaction.reply({ content: 'Invalid date format! Use YYYY-MM-DD (e.g., 2026-01-15)', ephemeral: true });
+        }
+        eventDate = new Date(dateText + 'T00:00:00-05:00'); // EST timezone
+      }
+
+      // Set time in EST (UTC-5)
+      eventDate.setHours(hours, minutes, 0, 0);
+      // Convert EST to UTC by adding 5 hours
+      const eventTimestamp = Math.floor(eventDate.getTime() / 1000) + (5 * 60 * 60);
+
+      // Use default roles
+      const roles = ['Active Manager', 'Backup Manager', 'Bouncer', 'Bartender', 'Dancer', 'DJ'];
+      const emojis = ['1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣'];
+      const customRoleConfig = {};
+      roles.forEach((role, i) => {
+        customRoleConfig[emojis[i]] = role;
+      });
+
+      // Create embed
+      const embed = new EmbedBuilder()
+        .setColor('#ff9900')
+        .setTitle(`📋 ${title}`)
+        .setDescription(`React to sign up for positions!\n\n` +
+          `**Event Starts:** <t:${eventTimestamp}:R>\n` +
+          `**Start Time:** <t:${eventTimestamp}:F>\n` +
+          '═══════════════════════════\n' +
+          buildCustomSignupListWithData(customRoleConfig, {}))
+        .setFooter({ text: 'React with the corresponding emoji to sign up!' })
+        .setTimestamp();
+
+      // Find ping role
+      const barStaffRole = interaction.guild.roles.cache.find(r => r.name.toLowerCase() === 'bar staff');
+
+      const messageContent = {
+        embeds: [embed]
+      };
+
+      if (barStaffRole) {
+        messageContent.content = `<@&${barStaffRole.id}> New event signup: **${title}**`;
+      }
+
+      const sentMessage = await targetChannel.send(messageContent);
+
+      // Initialize signup tracking
+      signups.set(sentMessage.id, {});
+
+      // Store custom role config for this message
+      if (!client.customEventRoles) {
+        client.customEventRoles = new Map();
+      }
+      client.customEventRoles.set(sentMessage.id, customRoleConfig);
+
+      // Add reactions
+      for (let i = 0; i < roles.length; i++) {
+        await sentMessage.react(emojis[i]);
+      }
+
+      // Log the event
+      const eventLog = {
+        title: title,
+        timestamp: eventTimestamp,
+        date: eventDate.toISOString(),
+        roles: roles,
+        createdBy: interaction.user.tag,
+        createdById: interaction.user.id,
+        createdAt: new Date().toISOString(),
+        channelId: targetChannel.id,
+        messageId: sentMessage.id,
+        signups: {} // Initialize empty signups object
+      };
+      scheduledEvents.push(eventLog);
+      saveScheduledEvents();
+      console.log(`Event logged: ${title} at ${eventDate.toISOString()}`);
+
+      await interaction.reply({ content: `✅ Event "${title}" created successfully in #shift-signup!`, ephemeral: true });
+    }
+  } catch (error) {
+    console.error('Error in interactionCreate:', error);
+    if (!interaction.replied && !interaction.deferred) {
+      try {
+        await interaction.reply({ content: 'An error occurred. Please check the bot console.', ephemeral: true });
+      } catch (e) {
+        console.error('Could not send error message:', e);
+      }
+    }
   }
 });
 
