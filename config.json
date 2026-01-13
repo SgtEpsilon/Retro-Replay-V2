@@ -1,10 +1,5 @@
 {
-  "token": 
-  "signupChannelId": 
+  "token": "BOT_TOKEN",
+  "signupChannelId": "CHANNEL_ID"
+    "openDays": ["Tuesday, Friday, Saturday, Sunday"]
 }
-```
-
-**Important:** Add `config.json` to your `.gitignore` file if you're using git, so you don't accidentally commit your token:
-```
-node_modules/
-config.json
