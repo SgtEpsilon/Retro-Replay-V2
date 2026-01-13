@@ -1,4 +1,5 @@
 {
-  "token": "MTQ2MDc1NDE3MDcwNDMwMjI3Mg.GbBiqK.tolN4pqyI6NrAY9fxFrNyQfjPUgpyVb4DfyNi8",
-  "signupChannelId": "1452021565486268637"
+  "token": "BOT_TOKEN",
+  "signupChannelId": "CHANNEL_ID"
+    "openDays": ["Tuesday, Friday, Saturday, Sunday"]
 }
