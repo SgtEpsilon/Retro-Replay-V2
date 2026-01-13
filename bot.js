@@ -459,12 +459,8 @@ client.on('messageCreate', async (message) => {
       await sentMessage.react(emojis[i]);
     }
 
-    // Send confirmation and delete after 5 seconds
-    const reply = await message.reply(`✅ Event "${eventToRepost.title}" reposted successfully in #shift-signup!`);
-    setTimeout(() => {
-      reply.delete().catch(() => {});
-      message.delete().catch(() => {});
-    }, 5000);
+    // Just delete the command message
+    await message.delete().catch(() => {});
   }
 
   // Create custom event command
@@ -592,12 +588,8 @@ client.on('messageCreate', async (message) => {
     saveScheduledEvents();
     console.log(`Event logged: ${title} at ${eventDate.toISOString()}`);
 
-    // Send confirmation and delete after 5 seconds
-    const reply = await message.reply(`✅ Event "${title}" created successfully in #shift-signup! Time is set in EST.`);
-    setTimeout(() => {
-      reply.delete().catch(() => {});
-      message.delete().catch(() => {});
-    }, 5000);
+    // Just delete the command message
+    await message.delete().catch(() => {});
   }
 });
 

@@ -15,6 +15,10 @@
     "createdById": "340192751075328012",
     "createdAt": "2026-01-13T23:02:45.508Z",
     "channelId": "1460765710216069344",
-    "messageId": "1460771063242690776"
+    "messageId": "1460771063242690776",
+    "signups": {
+      "Active Manager": [],
+      "Bartender": []
+    }
   }
 ]
