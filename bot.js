@@ -295,6 +295,11 @@ client.on('messageCreate', async (message) => {
           name: '!events',
           value: '**[Admin Only]** Shows a list of all scheduled events that have been created.',
           inline: false
+        },
+        {
+          name: '!repost',
+          value: '**[Admin Only]** Reposts the earliest upcoming event (or earliest event if none are upcoming).\nCreates a fresh signup sheet with empty signups.',
+          inline: false
         }
       )
       .addFields(
@@ -362,10 +367,101 @@ client.on('messageCreate', async (message) => {
     message.reply({ embeds: [embed] });
   }
 
+  // Repost earliest event
+  if (message.content === '!repost') {
+    if (!message.member.permissions.has(PermissionFlagsBits.Administrator)) {
+      return message.reply('You need Administrator permissions to use this command.');
+    }
+
+    if (scheduledEvents.length === 0) {
+      return message.reply('No events available to repost. Create an event first with `!createevent`');
+    }
+
+    // Find the shift-signup channel
+    let targetChannel = message.guild.channels.cache.find(ch => ch.name === 'shift-signup');
+    
+    if (!targetChannel) {
+      return message.reply('❌ Could not find the #shift-signup channel. Please create it first.');
+    }
+
+    // Find the earliest upcoming event (or just earliest if all are past)
+    const now = Math.floor(Date.now() / 1000);
+    const sortedEvents = [...scheduledEvents].sort((a, b) => a.timestamp - b.timestamp);
+    
+    // Try to find next upcoming event, otherwise use earliest
+    let eventToRepost = sortedEvents.find(e => e.timestamp > now) || sortedEvents[0];
+
+    // Use default roles
+    const roles = ['Active Manager', 'Backup Manager', 'Bouncer', 'Bartender', 'Dancer', 'DJ'];
+    const emojis = ['1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣'];
+    const customRoleConfig = {};
+    roles.forEach((role, i) => {
+      customRoleConfig[emojis[i]] = role;
+    });
+
+    // Create embed
+    const embed = new EmbedBuilder()
+      .setColor('#ff9900')
+      .setTitle(`📋 ${eventToRepost.title}`)
+      .setDescription(`React to sign up for positions!\n\n` +
+        `**Event Starts:** <t:${eventToRepost.timestamp}:R>\n` +
+        `**Start Time:** <t:${eventToRepost.timestamp}:F>\n` +
+        '═══════════════════════════\n' +
+        buildCustomSignupList(null, customRoleConfig))
+      .setFooter({ text: 'React with the corresponding emoji to sign up!' })
+      .setTimestamp();
+
+    // Find ping role
+    const barStaffRole = message.guild.roles.cache.find(r => r.name.toLowerCase() === 'bar staff');
+
+    const messageContent = {
+      embeds: [embed]
+    };
+
+    if (barStaffRole) {
+      messageContent.content = `<@&${barStaffRole.id}> Reposted event: **${eventToRepost.title}**`;
+    }
+
+    const sentMessage = await targetChannel.send(messageContent);
+
+    // Initialize signup tracking
+    signups.set(sentMessage.id, {});
+
+    // Store custom role config for this message
+    if (!client.customEventRoles) {
+      client.customEventRoles = new Map();
+    }
+    client.customEventRoles.set(sentMessage.id, customRoleConfig);
+
+    // Add reactions
+    for (let i = 0; i < roles.length; i++) {
+      await sentMessage.react(emojis[i]);
+    }
+
+    // Send confirmation
+    try {
+      await message.author.send(`✅ Event "${eventToRepost.title}" reposted successfully in #shift-signup!`);
+      await message.delete();
+    } catch (error) {
+      const reply = await message.reply(`✅ Event "${eventToRepost.title}" reposted successfully in #shift-signup!`);
+      setTimeout(() => {
+        reply.delete().catch(() => {});
+        message.delete().catch(() => {});
+      }, 5000);
+    }
+  }
+
   // Create custom event command
   if (message.content.startsWith('!createevent')) {
     if (!message.member.permissions.has(PermissionFlagsBits.Administrator)) {
       return message.reply('You need Administrator permissions to use this command.');
+    }
+
+    // Check if we're in the correct channel or get the shift-signup channel
+    let targetChannel = message.guild.channels.cache.find(ch => ch.name === 'shift-signup');
+    
+    if (!targetChannel) {
+      return message.reply('❌ Could not find the #shift-signup channel. Please create it first.');
     }
 
     // Parse command: !createevent "Event Title" HH:MM YYYY-MM-DD
@@ -447,7 +543,7 @@ client.on('messageCreate', async (message) => {
       messageContent.content = `<@&${barStaffRole.id}> New event signup: **${title}**`;
     }
 
-    const sentMessage = await message.channel.send(messageContent);
+    const sentMessage = await targetChannel.send(messageContent);
 
     // Initialize signup tracking
     signups.set(sentMessage.id, {});
@@ -472,7 +568,7 @@ client.on('messageCreate', async (message) => {
       createdBy: message.author.tag,
       createdById: message.author.id,
       createdAt: new Date().toISOString(),
-      channelId: message.channel.id,
+      channelId: targetChannel.id,
       messageId: sentMessage.id
     };
     scheduledEvents.push(eventLog);
@@ -481,12 +577,12 @@ client.on('messageCreate', async (message) => {
 
     // Send ephemeral-style response by DMing the user
     try {
-      await message.author.send(`✅ Event "${title}" created successfully! Time is set in EST.`);
+      await message.author.send(`✅ Event "${title}" created successfully in #shift-signup! Time is set in EST.`);
       // Delete the command message to keep channel clean
       await message.delete();
     } catch (error) {
       // If DM fails, reply normally but delete after 5 seconds
-      const reply = await message.reply(`✅ Event "${title}" created successfully! Time is set in EST.`);
+      const reply = await message.reply(`✅ Event "${title}" created successfully in #shift-signup! Time is set in EST.`);
       setTimeout(() => {
         reply.delete().catch(() => {});
         message.delete().catch(() => {});
