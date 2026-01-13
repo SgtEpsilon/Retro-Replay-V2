@@ -22,6 +22,11 @@ if (!config.signupChannelId) {
   process.exit(1);
 }
 
+if (!config.openDays || !Array.isArray(config.openDays)) {
+  console.error('openDays is missing in config.json. Please add an array of days the bar is open (e.g., ["Friday", "Saturday", "Sunday"])');
+  process.exit(1);
+}
+
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -260,9 +265,19 @@ function scheduleDailySignup() {
       next5PM.setUTCDate(next5PM.getUTCDate() + 1);
     }
     
+    // Find next open day
+    const daysOfWeek = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+    const openDaysLower = config.openDays.map(d => d.toLowerCase());
+    
+    // Keep advancing until we find an open day
+    while (!openDaysLower.includes(daysOfWeek[next5PM.getUTCDay()].toLowerCase())) {
+      next5PM.setUTCDate(next5PM.getUTCDate() + 1);
+      next5PM.setUTCHours(17, 0, 0, 0);
+    }
+    
     const timeUntil = next5PM.getTime() - now.getTime();
     
-    console.log(`Next signup sheet will be posted at ${next5PM.toISOString()}`);
+    console.log(`Next signup sheet will be posted at ${next5PM.toISOString()} (${daysOfWeek[next5PM.getUTCDay()]})`);
     
     setTimeout(async () => {
       try {
@@ -323,7 +338,7 @@ client.on('messageCreate', async (message) => {
       .addFields(
         {
           name: '📋 Automatic Features',
-          value: '• Signup sheets are automatically posted at **5 PM GMT** daily\n' +
+          value: `• Signup sheets are automatically posted at **5 PM GMT** on open days: **${config.openDays.join(', ')}**\n` +
                  '• The **@bar staff** role is pinged when new sheets are posted\n' +
                  '• Signup lists update in real-time as users react\n' +
                  '• Countdown shows time until bar opens at **2 AM GMT**',
