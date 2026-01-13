@@ -1,0 +1,10 @@
+{
+  "token": "MTQ2MDc1NDE3MDcwNDMwMjI3Mg.GMJ72n.qnELyw3Wofx8uOTeyo7fthcuR1yKkXOzwI2Uvc"
+  "signupChannelId": "1452021565486268637"
+}
+```
+
+**Important:** Add `config.json` to your `.gitignore` file if you're using git, so you don't accidentally commit your token:
+```
+node_modules/
+config.json
