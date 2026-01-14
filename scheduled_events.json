@@ -1,16 +1,24 @@
 {
-  "example_event_id": {
-    "title": "Sample Retro Replay Event",
-    "datetime": "2026-01-15T14:00:00.000Z",
+  "1461052286275948666": {
+    "title": "Friday Night Shift",
+    "datetime": 1768615200000,
+    "channelId": "1460772328517533893",
     "signups": {
       "Active Manager": [],
-      "Backup Manager": [],
-      "Bouncer": [],
-      "Bartender": [],
-      "Dancer": [],
-      "DJ": []
+      "Dancer": []
     },
-    "cancelled": false,
-    "channelId": "1460772328517533893"
+    "cancelled": false
+  },
+  "1461056611320725625": {
+    "title": "Friday Night Shift",
+    "datetime": 1768413600000,
+    "channelId": "1460772328517533893",
+    "signups": {
+      "Active Manager": [],
+      "Dancer": [],
+      "Bartender": [],
+      "Backup Manager": []
+    },
+    "cancelled": false
   }
-]
+}

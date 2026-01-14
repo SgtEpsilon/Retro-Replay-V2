@@ -1,7 +1,6 @@
 /***********************
- * Retro Replay Bot v29.2
+ * Retro Replay Bot v29.6
  * Discord.js v14
- * Event Cancel, Repost (copy signups), List Events
  ***********************/
 
 process.removeAllListeners('warning');
@@ -17,7 +16,11 @@ const {
   ActivityType,
   REST,
   Routes,
-  SlashCommandBuilder
+  SlashCommandBuilder,
+  ModalBuilder,
+  TextInputBuilder,
+  TextInputStyle,
+  ActionRowBuilder
 } = require('discord.js');
 
 const fs = require('fs');
@@ -26,30 +29,18 @@ const { DateTime } = require('luxon');
 const config = require('./config.json');
 
 /* ───────── CONFIG ───────── */
-config.token = process.env.BOT_TOKEN;
-config.clientId = process.env.CLIENT_ID;
-
+const TOKEN = process.env.BOT_TOKEN;
+const CLIENT_ID = process.env.CLIENT_ID;
 const TIMEZONE = 'America/New_York';
 const DATA_FILE = path.join(__dirname, 'scheduled_events.json');
 const SIGNUP_CHANNEL = config.signupChannelId;
-
-/* ───────── STARTUP SAFETY CHECKS ───────── */
-if (!config.token || !config.clientId) {
-  console.error('❌ Missing BOT_TOKEN or CLIENT_ID in .env');
-  process.exit(1);
-}
-
-if (!SIGNUP_CHANNEL) {
-  console.error('❌ signupChannelId missing from config.json');
-  process.exit(1);
-}
+const BAR_STAFF_ROLE_ID = config.barStaffRoleId;
 
 /* ───────── CLIENT ───────── */
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent,
     GatewayIntentBits.GuildMessageReactions
   ],
   partials: [Partials.Message, Partials.Reaction, Partials.Channel]
@@ -57,13 +48,12 @@ const client = new Client({
 
 /* ───────── STORAGE ───────── */
 let events = {};
+let reminderTimers = {};
 
-function loadEvents() {
-  if (!fs.existsSync(DATA_FILE)) return;
+if (fs.existsSync(DATA_FILE)) {
   try {
-    events = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
-  } catch (err) {
-    console.error('❌ Failed to read events file:', err);
+    events = JSON.parse(fs.readFileSync(DATA_FILE));
+  } catch {
     events = {};
   }
 }
@@ -72,15 +62,10 @@ function saveEvents() {
   fs.writeFileSync(DATA_FILE, JSON.stringify(events, null, 2));
 }
 
-loadEvents();
-
 /* ───────── PERMISSIONS ───────── */
 function hasEventPermission(member) {
-  if (!member) return false;
-  return member.roles.cache.some(role =>
-    config.eventCreatorRoles
-      .map(r => r.toLowerCase())
-      .includes(role.name.toLowerCase())
+  return member.roles.cache.some(r =>
+    config.eventCreatorRoles.includes(r.name)
   );
 }
 
@@ -98,245 +83,248 @@ const roleConfig = {
 function formatEST(ms) {
   return DateTime.fromMillis(ms)
     .setZone(TIMEZONE)
-    .toFormat('dd-MM-yyyy hh:mm a');
+    .toFormat('cccc, LLL d @ h:mm a');
 }
 
-function buildSignupList(signups = {}) {
-  return Object.entries(roleConfig)
-    .map(([emoji, role]) => {
-      const users = signups[role] || [];
-      return `**${emoji} ${role}:**\n${
-        users.length
-          ? users.map(id => `• <@${id}>`).join('\n')
-          : '*No signups yet*'
-      }`;
-    })
-    .join('\n\n');
+function buildSignupList(signups) {
+  return Object.entries(roleConfig).map(([emoji, role]) => {
+    const users = signups[role] || [];
+    return `**${emoji} ${role}:**\n${
+      users.length
+        ? users.map(id => `• <@${id}>`).join('\n')
+        : '*No signups yet*'
+    }`;
+  }).join('\n\n');
 }
 
-async function fetchChannelSafe(id) {
-  try {
-    return await client.channels.fetch(id);
-  } catch {
-    return null;
+/* ───────── NEXT SHIFT HELPERS ───────── */
+function getNextShift() {
+  const openDays = config.openDays || [];
+  let now = DateTime.now().setZone(TIMEZONE);
+
+  for (let i = 0; i < 14; i++) {
+    const day = now.plus({ days: i });
+    if (openDays.includes(day.toFormat('cccc'))) {
+      return day.set({ hour: 21, minute: 0, second: 0, millisecond: 0 });
+    }
   }
+  return null;
 }
 
-async function updateEmbed(messageId) {
-  const ev = events[messageId];
-  if (!ev) return;
-
-  const channel = await fetchChannelSafe(ev.channelId);
-  if (!channel) return;
-
-  try {
-    const msg = await channel.messages.fetch(messageId);
-    const embed = new EmbedBuilder()
-      .setColor(ev.cancelled ? 0xff0000 : 0x00b0f4)
-      .setTitle(ev.title)
-      .setDescription(
-        ev.cancelled
-          ? '❌ **EVENT CANCELLED**'
-          : `🕒 **When:** ${formatEST(ev.datetime)} (EST)\n\n${buildSignupList(ev.signups)}`
-      )
-      .setTimestamp();
-
-    await msg.edit({ embeds: [embed] });
-  } catch {}
+function getAutoTitle(shiftDate) {
+  return `${shiftDate.toFormat('cccc')} Night Shift`;
 }
 
-function getSortedEvents({ upcomingOnly = false } = {}) {
-  const now = Date.now();
-  return Object.entries(events)
-    .map(([id, ev]) => ({ id, ...ev }))
-    .filter(ev =>
-      upcomingOnly ? !ev.cancelled && ev.datetime > now : true
-    )
-    .sort((a, b) => a.datetime - b.datetime);
+function isTodayOpen() {
+  return config.openDays.includes(
+    DateTime.now().setZone(TIMEZONE).toFormat('cccc')
+  );
 }
 
-function getEarliestUpcomingEvent() {
-  return getSortedEvents({ upcomingOnly: true })[0] || null;
+/* ───────── REMINDERS ───────── */
+function scheduleReminder(eventId) {
+  const ev = events[eventId];
+  if (!ev || ev.cancelled || reminderTimers[eventId]) return;
+
+  const delay = ev.datetime - Date.now();
+  if (delay <= 0) return;
+
+  reminderTimers[eventId] = setTimeout(async () => {
+    try {
+      const channel = await client.channels.fetch(ev.channelId);
+      await channel.send(
+        `🔔 **Shift starting now!** <@&${BAR_STAFF_ROLE_ID}>`
+      );
+    } catch {}
+    delete reminderTimers[eventId];
+  }, delay);
 }
 
 /* ───────── SLASH COMMANDS ───────── */
 const commands = [
   new SlashCommandBuilder()
-    .setName('cancelevent')
-    .setDescription('Cancel an existing event')
-    .addStringOption(o =>
-      o.setName('messageid')
-        .setDescription('Event message ID')
-        .setRequired(true)
-    ),
+    .setName('createevent')
+    .setDescription('Create a new event'),
 
   new SlashCommandBuilder()
-    .setName('repostevent')
-    .setDescription('Repost the earliest upcoming event (copies signups)'),
-
-  new SlashCommandBuilder()
-    .setName('listevents')
-    .setDescription('List scheduled events')
-    .addStringOption(o =>
-      o.setName('filter')
-        .setDescription('Which events to list')
-        .addChoices(
-          { name: 'All events', value: 'all' },
-          { name: 'Upcoming only', value: 'upcoming' }
-        )
-    )
+    .setName('nextshift')
+    .setDescription('Show the next shift time and countdown')
 ];
 
-const rest = new REST({ version: '10' }).setToken(config.token);
+const rest = new REST({ version: '10' }).setToken(TOKEN);
 (async () => {
-  try {
-    await rest.put(
-      Routes.applicationCommands(config.clientId),
-      { body: commands.map(c => c.toJSON()) }
-    );
-    console.log('✅ Slash commands registered');
-  } catch (err) {
-    console.error('❌ Failed to register commands:', err);
-  }
+  await rest.put(
+    Routes.applicationCommands(CLIENT_ID),
+    { body: commands.map(c => c.toJSON()) }
+  );
 })();
 
 /* ───────── INTERACTIONS ───────── */
 client.on('interactionCreate', async interaction => {
-  if (!interaction.isChatInputCommand()) return;
 
-  /* ── LIST EVENTS ── */
-  if (interaction.commandName === 'listevents') {
+  /* CREATE EVENT */
+  if (interaction.isChatInputCommand() &&
+      interaction.commandName === 'createevent') {
+
     if (!hasEventPermission(interaction.member))
       return interaction.reply({ content: '❌ No permission.', ephemeral: true });
 
-    const filter = interaction.options.getString('filter') || 'all';
-    const list = getSortedEvents({ upcomingOnly: filter === 'upcoming' });
+    const nextShift = getNextShift();
+    if (!nextShift)
+      return interaction.reply({ content: '❌ No upcoming shift.', ephemeral: true });
 
-    if (!list.length)
-      return interaction.reply({ content: '📭 No events found.', ephemeral: true });
+    const modal = new ModalBuilder()
+      .setCustomId('createevent-modal')
+      .setTitle('Create Event');
 
-    let output = list.map(ev =>
-      `**${ev.title}**\n🕒 ${formatEST(ev.datetime)} (EST)\n🆔 \`${ev.id}\`\n${ev.cancelled ? '❌ CANCELLED' : '✅ ACTIVE'}`
-    ).join('\n\n');
+    modal.addComponents(
+      new ActionRowBuilder().addComponents(
+        new TextInputBuilder()
+          .setCustomId('title')
+          .setLabel('Event Title')
+          .setStyle(TextInputStyle.Short)
+          .setRequired(true)
+          .setValue(getAutoTitle(nextShift))
+      ),
+      new ActionRowBuilder().addComponents(
+        new TextInputBuilder()
+          .setCustomId('datetime')
+          .setLabel('Date & Time (YYYY-MM-DD HH:mm)')
+          .setStyle(TextInputStyle.Short)
+          .setRequired(true)
+          .setValue(nextShift.toFormat('yyyy-MM-dd HH:mm'))
+      )
+    );
 
-    if (output.length > 1900) output = output.slice(0, 1900) + '\n…';
-
-    return interaction.reply({ content: output, ephemeral: true });
+    return interaction.showModal(modal);
   }
 
-  /* ── CANCEL EVENT ── */
-  if (interaction.commandName === 'cancelevent') {
-    if (!hasEventPermission(interaction.member))
-      return interaction.reply({ content: '❌ No permission.', ephemeral: true });
+  /* MODAL SUBMIT */
+  if (interaction.isModalSubmit() &&
+      interaction.customId === 'createevent-modal') {
 
-    const id = interaction.options.getString('messageid');
-    const ev = events[id];
+    await interaction.deferReply({ ephemeral: true });
 
-    if (!ev)
-      return interaction.reply({ content: '❌ Event not found.', ephemeral: true });
+    const title = interaction.fields.getTextInputValue('title');
+    const dtStr = interaction.fields.getTextInputValue('datetime');
+    const dt = DateTime.fromFormat(dtStr, 'yyyy-MM-dd HH:mm', { zone: TIMEZONE });
 
-    if (ev.cancelled)
-      return interaction.reply({ content: '⚠️ Already cancelled.', ephemeral: true });
+    if (!dt.isValid)
+      return interaction.editReply('❌ Invalid date.');
 
-    ev.cancelled = true;
-    saveEvents();
-    await updateEmbed(id);
-
-    return interaction.reply({
-      content: `✅ Cancelled **${ev.title}**`,
-      ephemeral: true
-    });
-  }
-
-  /* ── REPOST EVENT (EVENT CREATOR ROLES ONLY) ── */
-  if (interaction.commandName === 'repostevent') {
-    if (!hasEventPermission(interaction.member))
-      return interaction.reply({
-        content: '❌ Only event creators can repost events.',
-        ephemeral: true
-      });
-
-    const ev = getEarliestUpcomingEvent();
-    if (!ev)
-      return interaction.reply({
-        content: '❌ No upcoming events to repost.',
-        ephemeral: true
-      });
-
-    const channel = await fetchChannelSafe(ev.channelId || SIGNUP_CHANNEL);
-    if (!channel)
-      return interaction.reply({
-        content: '❌ Cannot access signup channel.',
-        ephemeral: true
-      });
+    const unix = Math.floor(dt.toSeconds());
 
     const embed = new EmbedBuilder()
       .setColor(0x00b0f4)
-      .setTitle(ev.title)
+      .setTitle(title)
       .setDescription(
-        `🕒 **When:** ${formatEST(ev.datetime)} (EST)\n\n${buildSignupList(ev.signups)}`
+        `🕒 **When:** ${formatEST(dt.toMillis())} (EST)\n` +
+        `⏳ **Starts:** <t:${unix}:R>\n\n` +
+        buildSignupList({})
       )
       .setTimestamp();
 
+    const channel = await client.channels.fetch(SIGNUP_CHANNEL);
     const msg = await channel.send({ embeds: [embed] });
 
     events[msg.id] = {
-      title: ev.title,
-      datetime: ev.datetime,
+      title,
+      datetime: dt.toMillis(),
       channelId: channel.id,
-      signups: JSON.parse(JSON.stringify(ev.signups)),
+      signups: {},
       cancelled: false
     };
 
     saveEvents();
+    scheduleReminder(msg.id);
 
     for (const emoji of Object.keys(roleConfig)) {
       await msg.react(emoji);
     }
 
+    return interaction.editReply(`✅ Event **${title}** created.`);
+  }
+
+  /* NEXT SHIFT */
+  if (interaction.isChatInputCommand() &&
+      interaction.commandName === 'nextshift') {
+
+    const nextShift = getNextShift();
+    const unix = Math.floor(nextShift.toSeconds());
+
     return interaction.reply({
-      content: `🔁 Reposted **${ev.title}** with signups copied.`,
+      content:
+        `🕒 **Next Shift:** <t:${unix}:F>\n` +
+        `⏳ **Countdown:** <t:${unix}:R>\n` +
+        `🚪 **We are:** ${isTodayOpen() ? 'OPEN' : 'NOT OPEN'}`,
       ephemeral: true
     });
   }
 });
 
-/* ───────── REACTIONS ───────── */
+/* ───────── EMOJI SIGNUPS ───────── */
+async function updateEventEmbed(message) {
+  const ev = events[message.id];
+  if (!ev) return;
+
+  const unix = Math.floor(ev.datetime / 1000);
+
+  const embed = new EmbedBuilder()
+    .setColor(0x00b0f4)
+    .setTitle(ev.title)
+    .setDescription(
+      `🕒 **When:** ${formatEST(ev.datetime)} (EST)\n` +
+      `⏳ **Starts:** <t:${unix}:R>\n\n` +
+      buildSignupList(ev.signups)
+    )
+    .setTimestamp();
+
+  await message.edit({ embeds: [embed] });
+}
+
 client.on('messageReactionAdd', async (reaction, user) => {
   if (user.bot) return;
+  if (reaction.partial) await reaction.fetch();
+  if (reaction.message.partial) await reaction.message.fetch();
+
   const ev = events[reaction.message.id];
   const role = roleConfig[reaction.emoji.name];
   if (!ev || !role || ev.cancelled) return;
 
   ev.signups[role] ??= [];
-  if (!ev.signups[role].includes(user.id))
+  if (!ev.signups[role].includes(user.id)) {
     ev.signups[role].push(user.id);
-
-  saveEvents();
-  updateEmbed(reaction.message.id);
+    saveEvents();
+    await updateEventEmbed(reaction.message);
+  }
 });
 
 client.on('messageReactionRemove', async (reaction, user) => {
   if (user.bot) return;
+  if (reaction.partial) await reaction.fetch();
+  if (reaction.message.partial) await reaction.message.fetch();
+
   const ev = events[reaction.message.id];
   const role = roleConfig[reaction.emoji.name];
-  if (!ev || !role || ev.cancelled) return;
+  if (!ev || !role) return;
 
   ev.signups[role] =
     (ev.signups[role] || []).filter(id => id !== user.id);
 
   saveEvents();
-  updateEmbed(reaction.message.id);
+  await updateEventEmbed(reaction.message);
 });
 
 /* ───────── READY ───────── */
 client.once('ready', () => {
   console.log(`✅ Logged in as ${client.user.tag}`);
-  client.user.setPresence({
-    activities: [{ name: 'Retro Replay', type: ActivityType.Watching }],
-    status: 'online'
-  });
+  Object.keys(events).forEach(scheduleReminder);
 });
 
 /* ───────── LOGIN ───────── */
-client.login(config.token);
+if (!TOKEN || !CLIENT_ID) {
+  console.error('❌ Missing BOT_TOKEN or CLIENT_ID');
+  process.exit(1);
+}
+
+client.login(TOKEN);
