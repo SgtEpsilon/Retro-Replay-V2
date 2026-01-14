@@ -1,6 +1,33 @@
+<<<<<<< Updated upstream
 const { Client, GatewayIntentBits, PermissionFlagsBits, EmbedBuilder, ActionRowBuilder, ModalBuilder, TextInputBuilder, TextInputStyle, ButtonBuilder, ButtonStyle } = require('discord.js');
+=======
+/***********************
+ * Retro Replay Bot
+ * Full Commands + Slash Refactor
+ * v15 Ready | DD-MM-YYYY Format
+ ***********************/
+
+const {
+  Client,
+  GatewayIntentBits,
+  Partials,
+  EmbedBuilder,
+  ActivityType,
+  SlashCommandBuilder,
+  REST,
+  Routes,
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
+  ModalBuilder,
+  TextInputBuilder,
+  TextInputStyle
+} = require('discord.js');
+
+>>>>>>> Stashed changes
 const fs = require('fs');
 
+<<<<<<< Updated upstream
 // Read bot token from config file
 let config;
 try {
@@ -26,7 +53,13 @@ if (!config.openDays || !Array.isArray(config.openDays)) {
   console.error('openDays is missing in config.json. Please add an array of days the bar is open (e.g., ["Friday", "Saturday", "Sunday"])');
   process.exit(1);
 }
+=======
+/* ───────── SAFETY ───────── */
+process.on('unhandledRejection', err => console.error('[UnhandledRejection]', err));
+process.on('uncaughtException', err => console.error('[UncaughtException]', err));
+>>>>>>> Stashed changes
 
+/* ───────── CLIENT ───────── */
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -34,10 +67,18 @@ const client = new Client({
     GatewayIntentBits.GuildMessageReactions,
     GatewayIntentBits.MessageContent
   ],
-  partials: ['MESSAGE', 'CHANNEL', 'REACTION']
+  partials: [Partials.Message, Partials.Channel, Partials.Reaction]
 });
 
+<<<<<<< Updated upstream
 // Role configuration - map emojis to role names
+=======
+/* ───────── CONSTANTS ───────── */
+const DATA_FILE = path.join(__dirname, 'scheduled_events.json');
+const TIMEZONE = 'America/New_York';
+const SIGNUP_CHANNEL = config.signupChannelId;
+
+>>>>>>> Stashed changes
 const roleConfig = {
   '1️⃣': 'Active Manager',
   '2️⃣': 'Backup Manager',
@@ -47,6 +88,7 @@ const roleConfig = {
   '6️⃣': 'DJ'
 };
 
+<<<<<<< Updated upstream
 // Store signups - structure: { messageId: { roleName: [userId1, userId2, ...] } }
 const signups = new Map();
 let signupMessageId = null;
@@ -395,11 +437,219 @@ client.on('messageCreate', async (message) => {
 
     if (scheduledEvents.length > 10) {
       embed.setFooter({ text: `Showing 10 of ${scheduledEvents.length} events` });
+=======
+/* ───────── STORAGE ───────── */
+let events = {};
+let lastEventId = null;
+
+function loadEvents() {
+  if (!fs.existsSync(DATA_FILE)) return;
+  try {
+    events = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
+    lastEventId = Object.keys(events).pop() || null;
+  } catch (err) {
+    console.error('Failed to load events:', err);
+    events = {};
+    lastEventId = null;
+  }
+}
+
+function saveEvents() {
+  fs.writeFileSync(DATA_FILE, JSON.stringify(events, null, 2));
+}
+
+loadEvents();
+
+/* ───────── PERMISSIONS ───────── */
+function hasEventPermission(member) {
+  if (!member) return false;
+  return member.roles.cache.some(r =>
+    config.eventCreatorRoles.map(x => x.toLowerCase()).includes(r.name.toLowerCase())
+  );
+}
+
+/* ───────── TIME HELPERS ───────── */
+function formatEST(date) {
+  const options = {
+    timeZone: TIMEZONE,
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: true
+  };
+
+  const formatter = new Intl.DateTimeFormat('en-GB', options);
+  const parts = formatter.formatToParts(date);
+  let day, month, year, hour, minute, dayPeriod;
+
+  for (const part of parts) {
+    switch(part.type) {
+      case 'day': day = part.value; break;
+      case 'month': month = part.value; break;
+      case 'year': year = part.value; break;
+      case 'hour': hour = part.value; break;
+      case 'minute': minute = part.value; break;
+      case 'dayPeriod': dayPeriod = part.value; break;
+    }
+  }
+
+  return `${day}-${month}-${year} ${hour}:${minute} ${dayPeriod}`;
+}
+
+function getTodayUnix() {
+  return Math.floor(Date.now() / 1000);
+}
+
+function isOpenToday(openDays) {
+  const todayEST = new Date().toLocaleString('en-US', { timeZone: TIMEZONE, weekday: 'long' });
+  return openDays.some(d => d.toLowerCase() === todayEST.toLowerCase());
+}
+
+function getNextOpenDayUnix(openDays) {
+  const map = { sunday:0, monday:1, tuesday:2, wednesday:3, thursday:4, friday:5, saturday:6 };
+  const now = new Date();
+  const todayEST = new Date(now.toLocaleString('en-US', { timeZone: TIMEZONE }));
+  const todayDay = todayEST.getDay();
+  const openIdx = openDays.map(d => map[d.toLowerCase()]);
+
+  for(let i=0;i<7;i++){
+    const day=(todayDay+i)%7;
+    if(openIdx.includes(day)){
+      const nextEST = new Date(todayEST);
+      nextEST.setDate(nextEST.getDate()+i);
+      nextEST.setHours(14,0,0,0);
+      return nextEST;
+    }
+  }
+  return null;
+}
+
+/* ───────── EMBEDS ───────── */
+function buildSignupList(signups){
+  return Object.entries(roleConfig).map(([emoji, role])=>{
+    const users = signups[role] || [];
+    return `**${emoji} ${role}:**\n${users.length ? users.map(id=>`• <@${id}>`).join('\n') : '*No signups yet*'}`;
+  }).join('\n\n');
+}
+
+async function updateEmbed(messageId){
+  const ev = events[messageId];
+  if(!ev) return;
+
+  try{
+    const channel = await client.channels.fetch(ev.channelId||SIGNUP_CHANNEL);
+    const msg = await channel.messages.fetch(messageId);
+
+    const embed = new EmbedBuilder()
+      .setColor(ev.cancelled?0xff0000:0x00b0f4)
+      .setTitle(ev.title)
+      .setDescription(ev.cancelled ? '❌ **EVENT CANCELLED**' : `🕒 **When:** ${formatEST(new Date(ev.datetime))} (EST)\n\n${buildSignupList(ev.signups)}`)
+      .setTimestamp();
+
+    const row = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`cancel_${messageId}`)
+        .setLabel('Cancel Event')
+        .setStyle(ButtonStyle.Danger)
+        .setDisabled(ev.cancelled)
+    );
+
+    await msg.edit({embeds:[embed], components:[row]});
+  }catch(err){console.error(err);}
+}
+
+/* ───────── COMMANDS ───────── */
+const commands = new Map();
+
+/* HELP */
+commands.set('help',{
+  description:'Show all commands',
+  execute:msg=>{
+    msg.reply([...commands.entries()].map(([k,v])=>`**!${k}** — ${v.description}`).join('\n'));
+  }
+});
+commands.set('h', commands.get('help'));
+
+/* OPENDAYS */
+commands.set('opendays',{
+  description:'Show open days and countdown',
+  execute:msg=>{
+    const openDays=config.openDays;
+    if(!openDays||!openDays.length)return msg.reply('No open days configured.');
+    const todayUnix=getTodayUnix();
+    const openToday=isOpenToday(openDays);
+    const nextOpen=getNextOpenDayUnix(openDays);
+    const nextUnix=nextOpen?Math.floor(nextOpen.getTime()/1000):null;
+
+    msg.reply(`📅 **Open Days:** ${openDays.join(', ')}\n\n🕒 **Today is:** <t:${todayUnix}:F>\n${openToday?'✅ **OPEN TODAY**':'❌ **CLOSED TODAY**'}\n${nextUnix?`⏳ **Next Open Day:** <t:${nextUnix}:R> (<t:${nextUnix}:F>)`:'❌ No upcoming open days found.'}`);
+  }
+});
+
+/* ───────── SLASH COMMANDS ───────── */
+async function registerSlashCommands(){
+  if(!config.clientId) return;
+
+  const rest = new REST({version:'10'}).setToken(config.token);
+
+  const commandsData=[
+    new SlashCommandBuilder().setName('help').setDescription('Show all commands').toJSON(),
+    new SlashCommandBuilder().setName('opendays').setDescription('Show open days and countdown').toJSON(),
+    new SlashCommandBuilder().setName('createevent').setDescription('Create a new event (event creators only)').toJSON()
+  ];
+
+  try{
+    console.log('Registering slash commands...');
+    if(config.guildId) await rest.put(Routes.applicationGuildCommands(config.clientId,config.guildId),{body:commandsData});
+    else await rest.put(Routes.applicationCommands(config.clientId),{body:commandsData});
+    console.log('Slash commands registered.');
+  }catch(err){console.error(err);}
+}
+
+registerSlashCommands();
+
+/* ───────── INTERACTIONS ───────── */
+client.on('interactionCreate', async interaction=>{
+  // Slash command handler
+  if(interaction.isChatInputCommand()){
+    if(interaction.commandName==='help'){
+      return interaction.reply([...commands.entries()].map(([k,v])=>`**/${k}** — ${v.description}`).join('\n'));
+    }
+
+    if(interaction.commandName==='opendays'){
+      const openDays=config.openDays;
+      if(!openDays||!openDays.length)return interaction.reply('No open days configured.');
+      const todayUnix=getTodayUnix();
+      const openToday=isOpenToday(openDays);
+      const nextOpen=getNextOpenDayUnix(openDays);
+      const nextUnix=nextOpen?Math.floor(nextOpen.getTime()/1000):null;
+
+      return interaction.reply(`📅 **Open Days:** ${openDays.join(', ')}\n\n🕒 **Today is:** <t:${todayUnix}:F>\n${openToday?'✅ **OPEN TODAY**':'❌ **CLOSED TODAY**'}\n${nextUnix?`⏳ **Next Open Day:** <t:${nextUnix}:R> (<t:${nextUnix}:F>)`:'❌ No upcoming open days found.'}`);
+    }
+
+    if(interaction.commandName==='createevent'){
+      if(!hasEventPermission(interaction.member)) return interaction.reply({content:'❌ You do not have permission to create events.',ephemeral:true});
+
+      const modal=new ModalBuilder()
+        .setCustomId('create_event_modal')
+        .setTitle('Create New Event')
+        .addComponents(
+          new ActionRowBuilder().addComponents(
+            new TextInputBuilder().setCustomId('event_title').setLabel('Event Title').setStyle(TextInputStyle.Short).setRequired(true)
+          ),
+          new ActionRowBuilder().addComponents(
+            new TextInputBuilder().setCustomId('event_date').setLabel('Event Date (DD-MM-YYYY HH:MM)').setStyle(TextInputStyle.Short).setRequired(true)
+          )
+        );
+      return interaction.showModal(modal);
+>>>>>>> Stashed changes
     }
 
     message.reply({ embeds: [embed] });
   }
 
+<<<<<<< Updated upstream
   // Repost earliest event
   if (message.content === '!repost') {
     if (!message.member.permissions.has(PermissionFlagsBits.Administrator)) {
@@ -893,3 +1143,59 @@ client.on('messageReactionRemove', async (reaction, user) => {
 
 // Login with your bot token
 client.login(config.token);
+=======
+  // Modal submission for create event
+  if(interaction.isModalSubmit() && interaction.customId==='create_event_modal'){
+    const title=interaction.fields.getTextInputValue('event_title');
+    const dateStr=interaction.fields.getTextInputValue('event_date');
+    const match=dateStr.match(/^(\d{2})-(\d{2})-(\d{4}) (\d{2}):(\d{2})$/);
+    if(!match) return interaction.reply({content:'❌ Invalid date format! Use DD-MM-YYYY HH:MM',ephemeral:true});
+    const [_,day,month,year,hour,minute]=match;
+    const datetime=new Date(`${year}-${month}-${day}T${hour}:${minute}:00`);
+    if(isNaN(datetime.getTime())) return interaction.reply({content:'❌ Invalid date/time!',ephemeral:true});
+
+    const event={title,datetime:datetime.toISOString(),signups:{},cancelled:false,channelId:SIGNUP_CHANNEL};
+    const channel=await client.channels.fetch(SIGNUP_CHANNEL);
+    const embed=new EmbedBuilder().setColor(0x00b0f4).setTitle(title).setDescription(`🕒 **When:** ${formatEST(datetime)} (EST)\n\n${buildSignupList(event.signups)}`).setTimestamp();
+    const row=new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('cancel_placeholder').setLabel('Cancel Event').setStyle(ButtonStyle.Danger));
+    const message=await channel.send({embeds:[embed],components:[row]});
+    await message.edit({components:[new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId(`cancel_${message.id}`).setLabel('Cancel Event').setStyle(ButtonStyle.Danger))]});
+    for(const emoji of Object.keys(roleConfig)) await message.react(emoji);
+    events[message.id]=event;
+    saveEvents();
+    return interaction.reply({content:`✅ Event "${title}" created successfully!`,ephemeral:true});
+  }
+
+  // Cancel button
+  if(interaction.isButton() && interaction.customId.startsWith('cancel_')){
+    const messageId=interaction.customId.replace('cancel_','');
+    const ev=events[messageId];
+    if(!ev) return interaction.reply({content:'Event not found.',ephemeral:true});
+    if(!hasEventPermission(interaction.member)) return interaction.reply({content:'❌ You do not have permission.',ephemeral:true});
+    if(ev.cancelled) return interaction.reply({content:'Event already cancelled.',ephemeral:true});
+    ev.cancelled=true;
+    saveEvents();
+    await updateEmbed(messageId);
+    return interaction.reply({content:`✅ Event "${ev.title}" cancelled.`,ephemeral:true});
+  }
+});
+
+/* ───────── MESSAGE HANDLER ───────── */
+client.on('messageCreate', msg=>{
+  if(msg.author.bot||!msg.content.startsWith('!')) return;
+  const cmd=commands.get(msg.content.slice(1).split(' ')[0].toLowerCase());
+  if(cmd) cmd.execute(msg);
+});
+
+/* ───────── PRESENCE ───────── */
+client.once('clientReady', ()=>{
+  console.log(`Logged in as ${client.user.tag}`);
+  const activities=[{name:'Retro Replay',type:ActivityType.Watching},{name:'Hiring Staff',type:ActivityType.Playing}];
+  let i=0;
+  setInterval(()=>{client.user.setPresence({activities:[activities[i%activities.length]],status:'online'});i++;},30000);
+});
+
+/* ───────── LOGIN ───────── */
+if(!config.token){console.error("❌ Missing bot token!");process.exit(1);}
+client.login(config.token);
+>>>>>>> Stashed changes

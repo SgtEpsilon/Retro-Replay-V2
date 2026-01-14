@@ -1,5 +1,23 @@
 {
+<<<<<<< Updated upstream
   "token": "BOT_TOKEN",
   "signupChannelId": "CHANNEL_ID",
     "openDays": ["Tuesday", "Friday", "Saturday", "Sunday"]
 }
+=======
+  "token": "MTQ2MDc1NDE3MDcwNDMwMjI3Mg.GbBiqK.tolN4pqyI6NrAY9fxFrNyQfjPUgpyVb4DfyNi8",
+  "clientId": "1460754170704302272",
+  "signupChannelId": "1452021565486268637",
+  "openDays": [
+    "Tuesday",
+    "Friday",
+    "Saturday",
+    "Sunday"
+  ],
+  "eventCreatorRoles": [
+    "Owner",
+    "Head Manager",
+    "Manager"
+  ]
+}
+>>>>>>> Stashed changes

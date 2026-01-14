@@ -1,5 +1,6 @@
 # Retro Replay V2
 
+<<<<<<< Updated upstream
 # 🎉 Discord Event Signup Bot
 
 A feature-rich **Discord.js v14** bot for managing staff signups for events using **reaction roles**, **embeds**, and **modals**. Designed for clubs, bars, RP servers, or any community that needs organized event scheduling and role signups.
@@ -103,3 +104,100 @@ Prefix Commands (!)
 | `!repost`      | Repost most recent event  |
 ```
 
+=======
+# Retro Replay Bot
+
+![Retro Replay Bot Cheat Sheet](./Retro_Rep.png)
+
+Retro Replay Bot is a Discord bot designed for managing events, staff signups, and open day notifications. It supports both **text commands** and **slash commands** with full modals for event creation.
+
+---
+
+## **Quick Command Cheat Sheet**
+
+### **1️⃣ Text Commands (`!`)**
+
+| Command | Description |
+|---------|-------------|
+| `!help` / `!h` | Shows all available commands. |
+| `!opendays` | Displays open days, today’s status (OPEN/CLOSED), and the next open day countdown. |
+| `!createevent` | Opens a form to create a new event (restricted to `eventCreatorRoles`). |
+
+### **2️⃣ Slash Commands (`/`)**
+
+| Command | Description |
+|---------|-------------|
+| `/help` | Shows all commands. |
+| `/opendays` | Shows open days, today’s status, and the next open day. |
+| `/createevent` | Opens a modal to create a new event (restricted to `eventCreatorRoles`). |
+
+### **3️⃣ Event Creation (Modal Form)**
+
+Only members with roles in `eventCreatorRoles` can create events.
+
+**Steps:**
+
+1. Run `/createevent` or `!createevent`.
+2. Fill in the modal fields:
+   - **Event Title:** Name of your event.
+   - **Event Date:** Use `DD-MM-YYYY HH:MM` format (Example: `14-01-2026 18:30`).
+3. Submit → The bot posts the event in the **Signup Channel**.
+
+### **4️⃣ Event Signup**
+
+- The bot automatically adds reaction emojis for each role:
+
+| Emoji | Role |
+|-------|------|
+| 1️⃣ | Active Manager |
+| 2️⃣ | Backup Manager |
+| 3️⃣ | Bouncer |
+| 4️⃣ | Bartender |
+| 5️⃣ | Dancer |
+| 6️⃣ | DJ |
+
+- Users react to sign up. The embed updates automatically.
+
+### **5️⃣ Cancel Event**
+
+- Only `eventCreatorRoles` can cancel an event.
+- Click the **Cancel Event** button in the embed.
+- Once canceled:
+  - Embed turns red.
+  - Button is disabled.
+  - Signups are frozen.
+
+### **6️⃣ Open Days**
+
+- Shows if today is open or closed.
+- Displays countdown to next open day.
+
+Example:
+
+📅 Open Days: Tuesday, Friday, Saturday, Sunday
+🕒 Today is: <t:1705183200:F>
+❌ CLOSED TODAY
+⏳ Next Open Day: <t:1705442400:R> (<t:1705442400:F>)
+
+
+### **7️⃣ Notes**
+
+- All times are in **EST** (America/New_York).  
+- Event embeds **update automatically** with signups.  
+- Date format for events: **DD-MM-YYYY HH:MM**.
+
+---
+
+## **Installation & Setup**
+
+1. Clone this repository.
+2. Install dependencies:
+
+```bash
+npm install discord.js
+```
+3. Create config.json with your bot token, client ID, signup channel, open days, and event creator roles.
+4. Run the bot:
+```node bot.js
+```
+>>>>>>> Stashed changes
