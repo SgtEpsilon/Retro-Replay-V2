@@ -78,14 +78,19 @@ npm install discord.js
 3️⃣ Create config.json
 ```text
 {
-  "token": "YOUR_BOT_TOKEN",
-  "signupChannelId": "CHANNEL_ID_FOR_EVENTS",
-  "openDays": ["Friday", "Saturday"],
-  "eventCreatorRoles": [
-    "Owwner"
-    "Head Manager",
-    "Manager"
-  ]
+  "token": "",
+  "clientId": "",
+  "signupChannelId": "CHANNEL_ID",
+  "openDays": ["Tuesday", "Friday", "Saturday", "Sunday"],
+  "eventCreatorRoles": ["Owner", "Head Manager", "Manager"],
+  "roleCaps": {
+    "Active Manager": 1,
+    "Backup Manager": 1,
+    "Bouncer": 2,
+    "Bartender": 2,
+    "Dancer": 4,
+    "DJ": 1
+  }
 }
 ```
 4️⃣ Run the Bot
@@ -105,7 +110,6 @@ Prefix Commands (!)
 
 =======
 =======
->>>>>>> Stashed changes
 # Retro Replay Bot
 
 ![Retro Replay Bot Cheat Sheet](./Retro_Rep.png)
