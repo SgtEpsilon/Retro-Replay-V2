@@ -1,11 +1,13 @@
 /***********************
- * Retro Replay Bot v20
+ * Retro Replay Bot v22
  * Discord.js v14 Compatible
+ * DST-Safe Daily Shifts
+ * .env for BOT_TOKEN & CLIENT_ID
  ***********************/
-process.removeAllListeners('warning'); // Optional: removes all process warnings
-process.env.NODE_NO_WARNINGS = '1';   // Suppresses Node deprecation warnings
+process.removeAllListeners('warning');
+process.env.NODE_NO_WARNINGS = '1';
 
-require('dotenv').config(); // Load BOT_TOKEN from .env
+require('dotenv').config(); // Load BOT_TOKEN & CLIENT_ID
 
 const { 
   Client, GatewayIntentBits, Partials, EmbedBuilder, ActivityType,
@@ -19,8 +21,9 @@ const path = require('path');
 const schedule = require('node-schedule');
 const config = require('./config.json');
 
-// Override token from .env
+// Override sensitive values from .env
 config.token = process.env.BOT_TOKEN;
+config.clientId = process.env.CLIENT_ID;
 
 const DATA_FILE = path.join(__dirname, 'scheduled_events.json');
 const TIMEZONE = 'America/New_York';
@@ -109,7 +112,7 @@ function getNextOpenDayUnix(openDays) {
     if (openIdx.includes(day)) {
       const nextEST = new Date(todayEST);
       nextEST.setDate(nextEST.getDate() + i);
-      nextEST.setHours(21, 0, 0, 0); // shift at 9 PM EST
+      nextEST.setHours(21, 0, 0, 0); // 9 PM EST
       return nextEST;
     }
   }
@@ -190,6 +193,7 @@ client.on('interactionCreate', async interaction => {
     if (interaction.commandName === 'opendays') {
       const openDays = config.openDays;
       if (!openDays || !openDays.length) return interaction.reply('No open days configured.');
+
       const todayUnix = getTodayUnix();
       const openToday = isOpenToday(openDays);
 
@@ -200,7 +204,7 @@ client.on('interactionCreate', async interaction => {
         `📅 **Open Days:** ${openDays.join(', ')}\n` +
         `🕒 **Today is:** <t:${todayUnix}:F>\n` +
         (openToday ? '✅ **OPEN TODAY**' : '❌ **CLOSED TODAY**') + '\n' +
-        (nextUnix ? `⏳ **Next Open Day:** <t:${nextUnix}:R> (<t:${nextUnix}:F>)` : '❌ No upcoming open days found.')
+        (nextUnix ? `⏳ **Next Shift:** <t:${nextUnix}:R> (<t:${nextUnix}:F>)` : '❌ No upcoming shifts found.')
       );
     }
   }
@@ -231,10 +235,10 @@ client.on('interactionCreate', async interaction => {
     const temp = client.tempEvent?.[interaction.user.id];
     if (!temp) return interaction.reply({ content: '❌ No event to confirm.', ephemeral: true });
 
-    if (interaction.customId === 'confirm_event') {
-      const channel = await fetchChannelSafe(SIGNUP_CHANNEL);
-      if (!channel) return interaction.reply({ content: '❌ Cannot access signup channel.', ephemeral: true });
+    const channel = await fetchChannelSafe(SIGNUP_CHANNEL);
+    if (!channel) return interaction.reply({ content: '❌ Cannot access signup channel.', ephemeral: true });
 
+    if (interaction.customId === 'confirm_event') {
       const embed = new EmbedBuilder().setColor(0x00b0f4).setTitle(temp.title)
         .setDescription(`🕒 **When:** ${formatEST(temp.datetime)} (EST)\n\n${buildSignupList({})}`).setTimestamp();
 
@@ -277,28 +281,30 @@ client.on('messageReactionRemove', async (reaction, user) => {
   saveEvents();
 });
 
-/* ───────── AUTO DAILY SHIFT POSTS ───────── */
+/* ───────── DST-SAFE DAILY SHIFT POSTS ───────── */
 function scheduleDailyShifts() {
   const openDays = config.openDays.map(d => d.toLowerCase());
 
-  schedule.scheduleJob('0 21 * * *', async () => { // 21:00 EST = 5 PM GMT
-    const todayESTName = new Date().toLocaleString('en-US', { timeZone: TIMEZONE, weekday: 'long' }).toLowerCase();
-    if (!openDays.includes(todayESTName)) return;
+  schedule.scheduleJob('0 21 * * *', async () => { // 21:00 EST daily
+    const todayEST = new Date().toLocaleString('en-US', { timeZone: TIMEZONE });
+    const todayDayName = new Date(todayEST).toLocaleString('en-US', { timeZone: TIMEZONE, weekday: 'long' }).toLowerCase();
+
+    if (!openDays.includes(todayDayName)) return;
 
     const channel = await fetchChannelSafe(SIGNUP_CHANNEL);
     if (!channel) return;
 
-    const dayCapitalized = todayESTName.charAt(0).toUpperCase() + todayESTName.slice(1);
+    const dayCapitalized = todayDayName.charAt(0).toUpperCase() + todayDayName.slice(1);
     const title = `[${dayCapitalized}] Shift Signup`;
 
-    const nowUTC = new Date();
-    const shiftTime = new Date(nowUTC.toLocaleString('en-US', { timeZone: TIMEZONE }));
+    const shiftTime = new Date(todayEST);
     shiftTime.setHours(21, 0, 0, 0); // 9 PM EST
+    const shiftUnix = Math.floor(shiftTime.getTime() / 1000);
 
     const embed = new EmbedBuilder()
       .setColor(0x00b0f4)
       .setTitle(title)
-      .setDescription(`🕒 **Shift starts:** ${formatEST(shiftTime)} (EST)\n\n${buildSignupList({})}`)
+      .setDescription(`🕒 **Shift starts:** <t:${shiftUnix}:F> (<t:${shiftUnix}:R>)\n\n${buildSignupList({})}`)
       .setTimestamp();
 
     const msg = await channel.send({ embeds: [embed] });
@@ -306,6 +312,7 @@ function scheduleDailyShifts() {
     saveEvents();
 
     for (const emoji of Object.keys(roleConfig)) await msg.react(emoji);
+
     console.log(`✅ Posted daily shift signup for ${dayCapitalized} at 21:00 EST`);
   });
 }
@@ -314,7 +321,6 @@ function scheduleDailyShifts() {
 client.once('ready', () => {
   console.log(`Logged in as ${client.user.tag}`);
 
-  // Rotate presence
   const activities = [
     { name: 'Retro Replay', type: ActivityType.Watching },
     { name: 'Hiring Staff', type: ActivityType.Playing }
@@ -325,13 +331,16 @@ client.once('ready', () => {
     i++;
   }, 30000);
 
-  // Start daily shift scheduler
   scheduleDailyShifts();
 });
 
 /* ───────── LOGIN ───────── */
 if (!config.token) {
   console.error("❌ Missing BOT_TOKEN in .env");
+  process.exit(1);
+}
+if (!config.clientId) {
+  console.error("❌ Missing CLIENT_ID in .env");
   process.exit(1);
 }
 client.login(config.token);
