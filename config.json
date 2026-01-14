@@ -1,5 +1,16 @@
 {
-  "token": "BOT_TOKEN",
-  "signupChannelId": "CHANNEL_ID",
-    "openDays": ["Tuesday", "Friday", "Saturday", "Sunday"]
+  "clientId": "1460754170704302272",
+  "guildId": "1460761916619227361",
+  "signupChannelId": "1460772328517533893",
+  "openDays": [
+    "Tuesday",
+    "Friday",
+    "Saturday",
+    "Sunday"
+  ],
+  "eventCreatorRoles": [
+    "Owner",
+    "Head Manager",
+    "Manager"
+  ]
 }
