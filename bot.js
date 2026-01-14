@@ -1,6 +1,9 @@
 <<<<<<< Updated upstream
+<<<<<<< Updated upstream
 const { Client, GatewayIntentBits, PermissionFlagsBits, EmbedBuilder, ActionRowBuilder, ModalBuilder, TextInputBuilder, TextInputStyle, ButtonBuilder, ButtonStyle } = require('discord.js');
 =======
+=======
+>>>>>>> Stashed changes
 /***********************
  * Retro Replay Bot
  * Full Commands + Slash Refactor
@@ -27,6 +30,7 @@ const {
 >>>>>>> Stashed changes
 const fs = require('fs');
 
+<<<<<<< Updated upstream
 <<<<<<< Updated upstream
 // Read bot token from config file
 let config;
@@ -58,6 +62,11 @@ if (!config.openDays || !Array.isArray(config.openDays)) {
 process.on('unhandledRejection', err => console.error('[UnhandledRejection]', err));
 process.on('uncaughtException', err => console.error('[UncaughtException]', err));
 >>>>>>> Stashed changes
+=======
+/* ───────── SAFETY ───────── */
+process.on('unhandledRejection', err => console.error('[UnhandledRejection]', err));
+process.on('uncaughtException', err => console.error('[UncaughtException]', err));
+>>>>>>> Stashed changes
 
 /* ───────── CLIENT ───────── */
 const client = new Client({
@@ -71,8 +80,11 @@ const client = new Client({
 });
 
 <<<<<<< Updated upstream
+<<<<<<< Updated upstream
 // Role configuration - map emojis to role names
 =======
+=======
+>>>>>>> Stashed changes
 /* ───────── CONSTANTS ───────── */
 const DATA_FILE = path.join(__dirname, 'scheduled_events.json');
 const TIMEZONE = 'America/New_York';
@@ -88,6 +100,7 @@ const roleConfig = {
   '6️⃣': 'DJ'
 };
 
+<<<<<<< Updated upstream
 <<<<<<< Updated upstream
 // Store signups - structure: { messageId: { roleName: [userId1, userId2, ...] } }
 const signups = new Map();
@@ -460,6 +473,30 @@ function saveEvents() {
 
 loadEvents();
 
+=======
+/* ───────── STORAGE ───────── */
+let events = {};
+let lastEventId = null;
+
+function loadEvents() {
+  if (!fs.existsSync(DATA_FILE)) return;
+  try {
+    events = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
+    lastEventId = Object.keys(events).pop() || null;
+  } catch (err) {
+    console.error('Failed to load events:', err);
+    events = {};
+    lastEventId = null;
+  }
+}
+
+function saveEvents() {
+  fs.writeFileSync(DATA_FILE, JSON.stringify(events, null, 2));
+}
+
+loadEvents();
+
+>>>>>>> Stashed changes
 /* ───────── PERMISSIONS ───────── */
 function hasEventPermission(member) {
   if (!member) return false;
@@ -571,6 +608,7 @@ commands.set('help',{
   }
 });
 commands.set('h', commands.get('help'));
+<<<<<<< Updated upstream
 
 /* OPENDAYS */
 commands.set('opendays',{
@@ -631,6 +669,68 @@ client.on('interactionCreate', async interaction=>{
     if(interaction.commandName==='createevent'){
       if(!hasEventPermission(interaction.member)) return interaction.reply({content:'❌ You do not have permission to create events.',ephemeral:true});
 
+=======
+
+/* OPENDAYS */
+commands.set('opendays',{
+  description:'Show open days and countdown',
+  execute:msg=>{
+    const openDays=config.openDays;
+    if(!openDays||!openDays.length)return msg.reply('No open days configured.');
+    const todayUnix=getTodayUnix();
+    const openToday=isOpenToday(openDays);
+    const nextOpen=getNextOpenDayUnix(openDays);
+    const nextUnix=nextOpen?Math.floor(nextOpen.getTime()/1000):null;
+
+    msg.reply(`📅 **Open Days:** ${openDays.join(', ')}\n\n🕒 **Today is:** <t:${todayUnix}:F>\n${openToday?'✅ **OPEN TODAY**':'❌ **CLOSED TODAY**'}\n${nextUnix?`⏳ **Next Open Day:** <t:${nextUnix}:R> (<t:${nextUnix}:F>)`:'❌ No upcoming open days found.'}`);
+  }
+});
+
+/* ───────── SLASH COMMANDS ───────── */
+async function registerSlashCommands(){
+  if(!config.clientId) return;
+
+  const rest = new REST({version:'10'}).setToken(config.token);
+
+  const commandsData=[
+    new SlashCommandBuilder().setName('help').setDescription('Show all commands').toJSON(),
+    new SlashCommandBuilder().setName('opendays').setDescription('Show open days and countdown').toJSON(),
+    new SlashCommandBuilder().setName('createevent').setDescription('Create a new event (event creators only)').toJSON()
+  ];
+
+  try{
+    console.log('Registering slash commands...');
+    if(config.guildId) await rest.put(Routes.applicationGuildCommands(config.clientId,config.guildId),{body:commandsData});
+    else await rest.put(Routes.applicationCommands(config.clientId),{body:commandsData});
+    console.log('Slash commands registered.');
+  }catch(err){console.error(err);}
+}
+
+registerSlashCommands();
+
+/* ───────── INTERACTIONS ───────── */
+client.on('interactionCreate', async interaction=>{
+  // Slash command handler
+  if(interaction.isChatInputCommand()){
+    if(interaction.commandName==='help'){
+      return interaction.reply([...commands.entries()].map(([k,v])=>`**/${k}** — ${v.description}`).join('\n'));
+    }
+
+    if(interaction.commandName==='opendays'){
+      const openDays=config.openDays;
+      if(!openDays||!openDays.length)return interaction.reply('No open days configured.');
+      const todayUnix=getTodayUnix();
+      const openToday=isOpenToday(openDays);
+      const nextOpen=getNextOpenDayUnix(openDays);
+      const nextUnix=nextOpen?Math.floor(nextOpen.getTime()/1000):null;
+
+      return interaction.reply(`📅 **Open Days:** ${openDays.join(', ')}\n\n🕒 **Today is:** <t:${todayUnix}:F>\n${openToday?'✅ **OPEN TODAY**':'❌ **CLOSED TODAY**'}\n${nextUnix?`⏳ **Next Open Day:** <t:${nextUnix}:R> (<t:${nextUnix}:F>)`:'❌ No upcoming open days found.'}`);
+    }
+
+    if(interaction.commandName==='createevent'){
+      if(!hasEventPermission(interaction.member)) return interaction.reply({content:'❌ You do not have permission to create events.',ephemeral:true});
+
+>>>>>>> Stashed changes
       const modal=new ModalBuilder()
         .setCustomId('create_event_modal')
         .setTitle('Create New Event')
@@ -643,6 +743,7 @@ client.on('interactionCreate', async interaction=>{
           )
         );
       return interaction.showModal(modal);
+<<<<<<< Updated upstream
 >>>>>>> Stashed changes
     }
 
@@ -706,6 +807,8 @@ client.on('interactionCreate', async interaction=>{
 
     if (barStaffRole) {
       messageContent.content = `<@&${barStaffRole.id}> Reposted event: **${eventToRepost.title}**`;
+=======
+>>>>>>> Stashed changes
     }
 
     const sentMessage = await targetChannel.send(messageContent);
@@ -728,6 +831,7 @@ client.on('interactionCreate', async interaction=>{
     await message.delete().catch(() => {});
   }
 
+<<<<<<< Updated upstream
   // Create custom event command
   if (message.content.startsWith('!createevent')) {
     if (!message.member.permissions.has(PermissionFlagsBits.Administrator)) {
@@ -1142,6 +1246,61 @@ client.on('messageReactionRemove', async (reaction, user) => {
 });
 
 // Login with your bot token
+=======
+  // Modal submission for create event
+  if(interaction.isModalSubmit() && interaction.customId==='create_event_modal'){
+    const title=interaction.fields.getTextInputValue('event_title');
+    const dateStr=interaction.fields.getTextInputValue('event_date');
+    const match=dateStr.match(/^(\d{2})-(\d{2})-(\d{4}) (\d{2}):(\d{2})$/);
+    if(!match) return interaction.reply({content:'❌ Invalid date format! Use DD-MM-YYYY HH:MM',ephemeral:true});
+    const [_,day,month,year,hour,minute]=match;
+    const datetime=new Date(`${year}-${month}-${day}T${hour}:${minute}:00`);
+    if(isNaN(datetime.getTime())) return interaction.reply({content:'❌ Invalid date/time!',ephemeral:true});
+
+    const event={title,datetime:datetime.toISOString(),signups:{},cancelled:false,channelId:SIGNUP_CHANNEL};
+    const channel=await client.channels.fetch(SIGNUP_CHANNEL);
+    const embed=new EmbedBuilder().setColor(0x00b0f4).setTitle(title).setDescription(`🕒 **When:** ${formatEST(datetime)} (EST)\n\n${buildSignupList(event.signups)}`).setTimestamp();
+    const row=new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('cancel_placeholder').setLabel('Cancel Event').setStyle(ButtonStyle.Danger));
+    const message=await channel.send({embeds:[embed],components:[row]});
+    await message.edit({components:[new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId(`cancel_${message.id}`).setLabel('Cancel Event').setStyle(ButtonStyle.Danger))]});
+    for(const emoji of Object.keys(roleConfig)) await message.react(emoji);
+    events[message.id]=event;
+    saveEvents();
+    return interaction.reply({content:`✅ Event "${title}" created successfully!`,ephemeral:true});
+  }
+
+  // Cancel button
+  if(interaction.isButton() && interaction.customId.startsWith('cancel_')){
+    const messageId=interaction.customId.replace('cancel_','');
+    const ev=events[messageId];
+    if(!ev) return interaction.reply({content:'Event not found.',ephemeral:true});
+    if(!hasEventPermission(interaction.member)) return interaction.reply({content:'❌ You do not have permission.',ephemeral:true});
+    if(ev.cancelled) return interaction.reply({content:'Event already cancelled.',ephemeral:true});
+    ev.cancelled=true;
+    saveEvents();
+    await updateEmbed(messageId);
+    return interaction.reply({content:`✅ Event "${ev.title}" cancelled.`,ephemeral:true});
+  }
+});
+
+/* ───────── MESSAGE HANDLER ───────── */
+client.on('messageCreate', msg=>{
+  if(msg.author.bot||!msg.content.startsWith('!')) return;
+  const cmd=commands.get(msg.content.slice(1).split(' ')[0].toLowerCase());
+  if(cmd) cmd.execute(msg);
+});
+
+/* ───────── PRESENCE ───────── */
+client.once('clientReady', ()=>{
+  console.log(`Logged in as ${client.user.tag}`);
+  const activities=[{name:'Retro Replay',type:ActivityType.Watching},{name:'Hiring Staff',type:ActivityType.Playing}];
+  let i=0;
+  setInterval(()=>{client.user.setPresence({activities:[activities[i%activities.length]],status:'online'});i++;},30000);
+});
+
+/* ───────── LOGIN ───────── */
+if(!config.token){console.error("❌ Missing bot token!");process.exit(1);}
+>>>>>>> Stashed changes
 client.login(config.token);
 =======
   // Modal submission for create event

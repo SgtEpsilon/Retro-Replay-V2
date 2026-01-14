@@ -1,6 +1,7 @@
 # Retro Replay V2
 
 <<<<<<< Updated upstream
+<<<<<<< Updated upstream
 # 🎉 Discord Event Signup Bot
 
 A feature-rich **Discord.js v14** bot for managing staff signups for events using **reaction roles**, **embeds**, and **modals**. Designed for clubs, bars, RP servers, or any community that needs organized event scheduling and role signups.
@@ -105,6 +106,8 @@ Prefix Commands (!)
 ```
 
 =======
+=======
+>>>>>>> Stashed changes
 # Retro Replay Bot
 
 ![Retro Replay Bot Cheat Sheet](./Retro_Rep.png)
@@ -199,5 +202,9 @@ npm install discord.js
 3. Create config.json with your bot token, client ID, signup channel, open days, and event creator roles.
 4. Run the bot:
 ```node bot.js
+<<<<<<< Updated upstream
+```
+>>>>>>> Stashed changes
+=======
 ```
 >>>>>>> Stashed changes
