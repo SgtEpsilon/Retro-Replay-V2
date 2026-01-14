@@ -1,39 +1,32 @@
 /***********************
- * Retro Replay Bot v26
- * Discord.js v14 Compatible
- * DST-Safe Daily Shifts using Luxon
- * .env for BOT_TOKEN & CLIENT_ID
- * /createevent pre-fills next shift
+ * Retro Replay Bot v29
+ * Discord.js v14
+ * Event Cancel, Repost (copy signups), List Events (All / Upcoming)
  ***********************/
+
 process.removeAllListeners('warning');
 process.env.NODE_NO_WARNINGS = '1';
 
-require('dotenv').config(); // Load BOT_TOKEN & CLIENT_ID
+require('dotenv').config();
 
-const { 
-  Client, GatewayIntentBits, Partials, EmbedBuilder, ActivityType,
-  REST, Routes, SlashCommandBuilder,
-  ModalBuilder, TextInputBuilder, TextInputStyle, ActionRowBuilder,
-  ButtonBuilder, ButtonStyle
+const {
+  Client, GatewayIntentBits, Partials,
+  EmbedBuilder, ActivityType,
+  REST, Routes, SlashCommandBuilder
 } = require('discord.js');
 
 const fs = require('fs');
 const path = require('path');
-const schedule = require('node-schedule');
-const { DateTime } = require('luxon'); // DST-safe time handling
+const { DateTime } = require('luxon');
 const config = require('./config.json');
 
-// Override sensitive values from .env
+/* ───────── CONFIG ───────── */
 config.token = process.env.BOT_TOKEN;
 config.clientId = process.env.CLIENT_ID;
 
-const DATA_FILE = path.join(__dirname, 'scheduled_events.json');
 const TIMEZONE = 'America/New_York';
+const DATA_FILE = path.join(__dirname, 'scheduled_events.json');
 const SIGNUP_CHANNEL = config.signupChannelId;
-
-/* ───────── SAFETY ───────── */
-process.on('unhandledRejection', console.error);
-process.on('uncaughtException', console.error);
 
 /* ───────── CLIENT ───────── */
 const client = new Client({
@@ -44,28 +37,29 @@ const client = new Client({
     GatewayIntentBits.GuildMessageReactions,
     GatewayIntentBits.DirectMessages
   ],
-  partials: [Partials.Message, Partials.Channel, Partials.Reaction]
+  partials: [Partials.Message, Partials.Reaction, Partials.Channel]
 });
 
 /* ───────── STORAGE ───────── */
 let events = {};
 function loadEvents() {
   if (!fs.existsSync(DATA_FILE)) return;
-  try { events = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8')); } 
+  try { events = JSON.parse(fs.readFileSync(DATA_FILE)); }
   catch { events = {}; }
 }
-function saveEvents() { fs.writeFileSync(DATA_FILE, JSON.stringify(events, null, 2)); }
+function saveEvents() {
+  fs.writeFileSync(DATA_FILE, JSON.stringify(events, null, 2));
+}
 loadEvents();
 
 /* ───────── PERMISSIONS ───────── */
 function hasEventPermission(member) {
-  if (!member) return false;
-  return member.roles.cache.some(r =>
+  return member?.roles.cache.some(r =>
     config.eventCreatorRoles.map(x => x.toLowerCase()).includes(r.name.toLowerCase())
   );
 }
 
-/* ───────── ROLE EMOJIS ───────── */
+/* ───────── ROLES ───────── */
 const roleConfig = {
   '1️⃣': 'Active Manager',
   '2️⃣': 'Backup Manager',
@@ -75,46 +69,30 @@ const roleConfig = {
   '6️⃣': 'DJ'
 };
 
-/* ───────── TIME HELPERS ───────── */
-function formatEST(date) {
-  if (!(date instanceof Date) || isNaN(date.getTime())) return 'Invalid Date';
-  const dt = DateTime.fromJSDate(date).setZone(TIMEZONE);
-  return dt.toFormat('dd-MM-yyyy hh:mm a');
+/* ───────── HELPERS ───────── */
+function formatEST(ms) {
+  return DateTime.fromMillis(ms).setZone(TIMEZONE).toFormat('dd-MM-yyyy hh:mm a');
 }
 
-function getTodayUnix() { return Math.floor(Date.now() / 1000); }
-
-function isOpenToday(openDays) {
-  const today = DateTime.now().setZone(TIMEZONE).toFormat('cccc');
-  return openDays.some(d => d.toLowerCase() === today.toLowerCase());
-}
-
-function getNextOpenDayUnix(openDays) {
-  const now = DateTime.now().setZone(TIMEZONE);
-  for (let i = 0; i < 7; i++) {
-    const nextDay = now.plus({ days: i });
-    const weekday = nextDay.toFormat('cccc').toLowerCase();
-    if (openDays.map(d => d.toLowerCase()).includes(weekday)) {
-      const shiftTime = nextDay.set({ hour: 21, minute: 0, second: 0, millisecond: 0 });
-      return shiftTime.toSeconds();
-    }
-  }
-  return null;
-}
-
-/* ───────── EMBED HELPERS ───────── */
 function buildSignupList(signups) {
   return Object.entries(roleConfig).map(([emoji, role]) => {
     const users = signups[role] || [];
-    return `**${emoji} ${role}:**\n${users.length ? users.map(u => `• <@${u}>`).join('\n') : '*No signups yet*'}`;
+    return `**${emoji} ${role}:**\n${
+      users.length ? users.map(u => `• <@${u}>`).join('\n') : '*No signups yet*'
+    }`;
   }).join('\n\n');
+}
+
+async function fetchChannelSafe(id) {
+  try { return await client.channels.fetch(id); }
+  catch { return null; }
 }
 
 async function updateEmbed(messageId) {
   const ev = events[messageId];
   if (!ev) return;
 
-  const channel = await fetchChannelSafe(ev.channelId || SIGNUP_CHANNEL);
+  const channel = await fetchChannelSafe(ev.channelId);
   if (!channel) return;
 
   try {
@@ -122,219 +100,208 @@ async function updateEmbed(messageId) {
     const embed = new EmbedBuilder()
       .setColor(ev.cancelled ? 0xff0000 : 0x00b0f4)
       .setTitle(ev.title)
-      .setDescription(ev.cancelled ? '❌ **EVENT CANCELLED**' : `🕒 **When:** ${formatEST(new Date(ev.datetime))} (EST)\n\n${buildSignupList(ev.signups)}`)
+      .setDescription(
+        ev.cancelled
+          ? '❌ **EVENT CANCELLED**'
+          : `🕒 **When:** ${formatEST(ev.datetime)} (EST)\n\n${buildSignupList(ev.signups)}`
+      )
       .setTimestamp();
+
     await msg.edit({ embeds: [embed] });
-  } catch (err) { console.error(err); }
+  } catch {}
 }
 
-/* ───────── SAFE CHANNEL FETCH ───────── */
-async function fetchChannelSafe(channelId) {
-  try {
-    const channel = await client.channels.fetch(channelId);
-    if (!channel) throw new Error('Channel not found');
-    return channel;
-  } catch (err) {
-    console.warn(`⚠️ Bot cannot access channel ${channelId}. Check ID and permissions.`);
-    return null;
-  }
+function getSortedEvents({ upcomingOnly = false } = {}) {
+  const now = Date.now();
+
+  return Object.entries(events)
+    .map(([id, ev]) => ({ id, ...ev }))
+    .filter(ev => {
+      if (upcomingOnly) {
+        return !ev.cancelled && ev.datetime > now;
+      }
+      return true;
+    })
+    .sort((a, b) => a.datetime - b.datetime);
+}
+
+function getEarliestUpcomingEvent() {
+  return getSortedEvents({ upcomingOnly: true })[0] || null;
 }
 
 /* ───────── SLASH COMMANDS ───────── */
-const slashCommands = [
-  new SlashCommandBuilder().setName('createevent').setDescription('Create a new event via form'),
-  new SlashCommandBuilder().setName('opendays').setDescription('Show open days with countdown')
+const commands = [
+  new SlashCommandBuilder()
+    .setName('cancelevent')
+    .setDescription('Cancel an existing event')
+    .addStringOption(o =>
+      o.setName('messageid')
+        .setDescription('Event message ID')
+        .setRequired(true)
+    ),
+
+  new SlashCommandBuilder()
+    .setName('repostevent')
+    .setDescription('Repost the earliest upcoming event (copies signups)'),
+
+  new SlashCommandBuilder()
+    .setName('listevents')
+    .setDescription('List scheduled events')
+    .addStringOption(o =>
+      o.setName('filter')
+        .setDescription('Which events to list')
+        .addChoices(
+          { name: 'All events', value: 'all' },
+          { name: 'Upcoming only', value: 'upcoming' }
+        )
+    )
 ];
 
 const rest = new REST({ version: '10' }).setToken(config.token);
 (async () => {
-  try {
-    console.log('Refreshing application (/) commands...');
-    await rest.put(Routes.applicationCommands(config.clientId), { body: slashCommands.map(cmd => cmd.toJSON()) });
-    console.log('Slash commands registered successfully.');
-  } catch (err) { console.error(err); }
+  await rest.put(
+    Routes.applicationCommands(config.clientId),
+    { body: commands.map(c => c.toJSON()) }
+  );
 })();
 
-/* ───────── INTERACTION HANDLER ───────── */
-client.tempEvent = {};
-
+/* ───────── INTERACTIONS ───────── */
 client.on('interactionCreate', async interaction => {
+  if (!interaction.isChatInputCommand()) return;
 
-  if (interaction.isChatInputCommand()) {
+  /* ── LIST EVENTS ── */
+  if (interaction.commandName === 'listevents') {
+    if (!hasEventPermission(interaction.member))
+      return interaction.reply({ content: '❌ No permission.', ephemeral: true });
 
-    if (interaction.commandName === 'createevent') {
-      if (!hasEventPermission(interaction.member))
-        return interaction.reply({ content: '❌ You do not have permission.', ephemeral: true });
+    const filter = interaction.options.getString('filter') || 'all';
+    const list = getSortedEvents({ upcomingOnly: filter === 'upcoming' });
 
-      const modal = new ModalBuilder()
-        .setCustomId('create_event_modal')
-        .setTitle('Create New Event');
+    if (!list.length)
+      return interaction.reply({ content: '📭 No events found.', ephemeral: true });
 
-      // Pre-fill date with next open shift
-      const openDays = config.openDays;
-      const nextShiftUnix = getNextOpenDayUnix(openDays);
-      const nextShiftDT = DateTime.fromSeconds(nextShiftUnix).setZone(TIMEZONE);
-      const defaultDateStr = nextShiftDT.toFormat('dd-MM-yyyy HH:mm');
+    let output = list.map(ev =>
+      `**${ev.title}**\n` +
+      `🕒 ${formatEST(ev.datetime)} (EST)\n` +
+      `🆔 \`${ev.id}\`\n` +
+      `${ev.cancelled ? '❌ CANCELLED' : '✅ ACTIVE'}`
+    ).join('\n\n');
 
-      const titleInput = new TextInputBuilder()
-        .setCustomId('event_title')
-        .setLabel("Event Title")
-        .setStyle(TextInputStyle.Short)
-        .setRequired(true);
-
-      const dateInput = new TextInputBuilder()
-        .setCustomId('event_date')
-        .setLabel("Event Date (DD-MM-YYYY HH:MM)")
-        .setStyle(TextInputStyle.Short)
-        .setRequired(true)
-        .setValue(defaultDateStr); // pre-fill
-
-      modal.addComponents(
-        new ActionRowBuilder().addComponents(titleInput),
-        new ActionRowBuilder().addComponents(dateInput)
-      );
-
-      await interaction.showModal(modal);
+    if (output.length > 1900) {
+      output = output.slice(0, 1900) + '\n…';
     }
 
-    if (interaction.commandName === 'opendays') {
-      const openDays = config.openDays;
-      if (!openDays || !openDays.length) return interaction.reply('No open days configured.');
-
-      const todayUnix = getTodayUnix();
-      const openToday = isOpenToday(openDays);
-      const nextUnix = getNextOpenDayUnix(openDays);
-
-      await interaction.reply(
-        `📅 **Open Days:** ${openDays.join(', ')}\n` +
-        `🕒 **Today is:** <t:${todayUnix}:F>\n` +
-        (openToday ? '✅ **OPEN TODAY**' : '❌ **CLOSED TODAY**') + '\n' +
-        (nextUnix ? `⏳ **Next Shift:** <t:${nextUnix}:R> (<t:${nextUnix}:F>)` : '❌ No upcoming shifts found.') + '\n' +
-        `• Signup sheets are automatically posted at **5 PM GMT** on open days: **${openDays.join(', ')}**\n` +
-        `• Make sure to sign up for your roles in time.`
-      );
-    }
+    return interaction.reply({ content: output, ephemeral: true });
   }
 
-  if (interaction.isModalSubmit() && interaction.customId === 'create_event_modal') {
-    const title = interaction.fields.getTextInputValue('event_title');
-    const dateStr = interaction.fields.getTextInputValue('event_date');
-    const match = dateStr.match(/^(\d{2})-(\d{2})-(\d{4}) (\d{2}):(\d{2})$/);
-    if (!match) return interaction.reply({ content: '❌ Invalid date format. Use DD-MM-YYYY HH:MM', ephemeral: true });
+  /* ── CANCEL EVENT ── */
+  if (interaction.commandName === 'cancelevent') {
+    if (!hasEventPermission(interaction.member))
+      return interaction.reply({ content: '❌ No permission.', ephemeral: true });
 
-    const [ , day, month, year, hour, minute ] = match;
-    const datetime = DateTime.fromISO(`${year}-${month}-${day}T${hour}:${minute}:00`, { zone: TIMEZONE });
-    if (!datetime.isValid) return interaction.reply({ content: '❌ Invalid date/time.', ephemeral: true });
+    const id = interaction.options.getString('messageid');
+    const ev = events[id];
 
-    const embed = new EmbedBuilder().setColor(0x00b0f4).setTitle(title)
-      .setDescription(`🕒 **When:** ${datetime.toFormat('dd-MM-yyyy hh:mm a')} (EST)\n\n${buildSignupList({})}`).setTimestamp();
+    if (!ev)
+      return interaction.reply({ content: '❌ Event not found.', ephemeral: true });
 
-    const row = new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId('confirm_event').setLabel('✅ Confirm').setStyle(ButtonStyle.Success),
-      new ButtonBuilder().setCustomId('cancel_event').setLabel('❌ Cancel').setStyle(ButtonStyle.Danger)
-    );
+    if (ev.cancelled)
+      return interaction.reply({ content: '⚠️ Already cancelled.', ephemeral: true });
 
-    client.tempEvent[interaction.user.id] = { title, datetime };
-    await interaction.reply({ embeds: [embed], components: [row], ephemeral: true });
+    ev.cancelled = true;
+    saveEvents();
+    await updateEmbed(id);
+
+    return interaction.reply({
+      content: `✅ Cancelled **${ev.title}**`,
+      ephemeral: true
+    });
   }
 
-  if (interaction.isButton()) {
-    const temp = client.tempEvent?.[interaction.user.id];
-    if (!temp) return interaction.reply({ content: '❌ No event to confirm.', ephemeral: true });
+  /* ── REPOST EVENT ── */
+  if (interaction.commandName === 'repostevent') {
+    if (!hasEventPermission(interaction.member))
+      return interaction.reply({ content: '❌ No permission.', ephemeral: true });
 
-    if (interaction.customId === 'confirm_event') {
-      const channel = await fetchChannelSafe(SIGNUP_CHANNEL);
-      if (!channel) return interaction.reply({ content: '❌ Cannot access signup channel.', ephemeral: true });
+    const ev = getEarliestUpcomingEvent();
+    if (!ev)
+      return interaction.reply({ content: '❌ No upcoming events.', ephemeral: true });
 
-      const embed = new EmbedBuilder().setColor(0x00b0f4).setTitle(temp.title)
-        .setDescription(`🕒 **When:** ${temp.datetime.toFormat('dd-MM-yyyy hh:mm a')} (EST)\n\n${buildSignupList({})}`).setTimestamp();
+    const channel = await fetchChannelSafe(ev.channelId || SIGNUP_CHANNEL);
+    if (!channel)
+      return interaction.reply({ content: '❌ Cannot access channel.', ephemeral: true });
 
-      const msg = await channel.send({ embeds: [embed] });
-      events[msg.id] = { title: temp.title, datetime: temp.datetime.toMillis(), channelId: channel.id, signups: {}, cancelled: false };
-      saveEvents();
+    const embed = new EmbedBuilder()
+      .setColor(0x00b0f4)
+      .setTitle(ev.title)
+      .setDescription(
+        `🕒 **When:** ${formatEST(ev.datetime)} (EST)\n\n${buildSignupList(ev.signups)}`
+      )
+      .setTimestamp();
 
-      for (const emoji of Object.keys(roleConfig)) await msg.react(emoji);
+    const msg = await channel.send({ embeds: [embed] });
 
-      delete client.tempEvent[interaction.user.id];
-      await interaction.update({ content: `✅ Event "${temp.title}" created!`, embeds: [], components: [] });
+    events[msg.id] = {
+      title: ev.title,
+      datetime: ev.datetime,
+      channelId: channel.id,
+      signups: JSON.parse(JSON.stringify(ev.signups)),
+      cancelled: false
+    };
+
+    saveEvents();
+
+    for (const emoji of Object.keys(roleConfig)) {
+      await msg.react(emoji);
     }
 
-    if (interaction.customId === 'cancel_event') {
-      delete client.tempEvent[interaction.user.id];
-      await interaction.update({ content: '❌ Event creation cancelled.', embeds: [], components: [] });
-    }
+    return interaction.reply({
+      content: `🔁 Reposted **${ev.title}** with signups copied.`,
+      ephemeral: true
+    });
   }
 });
 
-/* ───────── REACTION SIGNUPS ───────── */
+/* ───────── REACTIONS ───────── */
 client.on('messageReactionAdd', async (reaction, user) => {
   if (user.bot) return;
-  const ev = events[reaction.message.id]; if (!ev) return;
-  const role = roleConfig[reaction.emoji.name]; if (!role) return;
-  if (!ev.signups[role]) ev.signups[role] = [];
-  if (!ev.signups[role].includes(user.id)) ev.signups[role].push(user.id);
-  await updateEmbed(reaction.message.id);
+  const ev = events[reaction.message.id];
+  const role = roleConfig[reaction.emoji.name];
+  if (!ev || !role || ev.cancelled) return;
+
+  ev.signups[role] ??= [];
+  if (!ev.signups[role].includes(user.id))
+    ev.signups[role].push(user.id);
+
   saveEvents();
+  updateEmbed(reaction.message.id);
 });
 
 client.on('messageReactionRemove', async (reaction, user) => {
   if (user.bot) return;
-  const ev = events[reaction.message.id]; if (!ev) return;
-  const role = roleConfig[reaction.emoji.name]; if (!role) return;
-  if (ev.signups[role]) ev.signups[role] = ev.signups[role].filter(id => id !== user.id);
-  await updateEmbed(reaction.message.id);
+  const ev = events[reaction.message.id];
+  const role = roleConfig[reaction.emoji.name];
+  if (!ev || !role || ev.cancelled) return;
+
+  ev.signups[role] =
+    (ev.signups[role] || []).filter(id => id !== user.id);
+
   saveEvents();
+  updateEmbed(reaction.message.id);
 });
 
-/* ───────── DST-SAFE DAILY SHIFT POSTS ───────── */
-function scheduleDailyShifts() {
-  const openDays = config.openDays.map(d => d.toLowerCase());
-  schedule.scheduleJob('0 21 * * *', async () => { // 21:00 EST = 5 PM GMT
-    const nowEST = DateTime.now().setZone(TIMEZONE);
-    const todayName = nowEST.toFormat('cccc').toLowerCase();
-    if (!openDays.includes(todayName)) return;
-
-    const channel = await fetchChannelSafe(SIGNUP_CHANNEL);
-    if (!channel) return;
-
-    const dayCapitalized = todayName.charAt(0).toUpperCase() + todayName.slice(1);
-    const title = `[${dayCapitalized}] Shift Signup`;
-
-    const shiftTime = nowEST.set({ hour: 21, minute: 0, second: 0, millisecond: 0 });
-
-    const embed = new EmbedBuilder()
-      .setColor(0x00b0f4)
-      .setTitle(title)
-      .setDescription(`🕒 **Shift starts:** ${shiftTime.toFormat('dd-MM-yyyy hh:mm a')} (EST)\n\n${buildSignupList({})}`)
-      .setTimestamp();
-
-    const msg = await channel.send({ embeds: [embed] });
-    events[msg.id] = { title, datetime: shiftTime.toMillis(), channelId: channel.id, signups: {}, cancelled: false };
-    saveEvents();
-
-    for (const emoji of Object.keys(roleConfig)) await msg.react(emoji);
-    console.log(`✅ Posted daily shift signup for ${dayCapitalized} at ${shiftTime.toFormat('hh:mm a')} EST`);
-  });
-}
-
-/* ───────── PRESENCE ───────── */
+/* ───────── READY ───────── */
 client.once('ready', () => {
-  console.log(`Logged in as ${client.user.tag}`);
-
-  const activities = [
-    { name: 'Retro Replay', type: ActivityType.Watching },
-    { name: 'Hiring Staff', type: ActivityType.Playing }
-  ];
-  let i = 0;
-  setInterval(() => {
-    client.user.setPresence({ activities: [activities[i % activities.length]], status: 'online' });
-    i++;
-  }, 30000);
-
-  scheduleDailyShifts();
+  console.log(`✅ Logged in as ${client.user.tag}`);
+  client.user.setPresence({
+    activities: [{ name: 'Retro Replay', type: ActivityType.Watching }],
+    status: 'online'
+  });
 });
 
 /* ───────── LOGIN ───────── */
-if (!config.token) { console.error("❌ Missing BOT_TOKEN in .env"); process.exit(1); }
-if (!config.clientId) { console.error("❌ Missing CLIENT_ID in .env"); process.exit(1); }
+if (!config.token || !config.clientId) {
+  console.error('❌ Missing BOT_TOKEN or CLIENT_ID');
+  process.exit(1);
+}
 client.login(config.token);
