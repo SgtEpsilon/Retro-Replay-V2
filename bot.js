@@ -338,7 +338,7 @@ client.on('messageCreate', async (message) => {
       .addFields(
         {
           name: '📋 Automatic Features',
-          value: `• Signup sheets are automatically posted at **5 PM GMT** on open days: **${config.openDays.join(', ')}**\n` +
+          value: '• Signup sheets are automatically posted at **5 PM GMT** on open days: **${config.openDays.join(', ')}**\n`' +
                  '• The **@bar staff** role is pinged when new sheets are posted\n' +
                  '• Signup lists update in real-time as users react\n' +
                  '• Countdown shows time until bar opens at **2 AM GMT**',

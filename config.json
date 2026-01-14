@@ -1,5 +1,5 @@
 {
   "token": "BOT_TOKEN",
-  "signupChannelId": "CHANNEL_ID"
-    "openDays": ["Tuesday, Friday, Saturday, Sunday"]
+  "signupChannelId": "CHANNEL_ID",
+    "openDays": ["Tuesday", "Friday", "Saturday", "Sunday"]
 }
