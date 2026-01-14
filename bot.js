@@ -1,7 +1,7 @@
 /***********************
- * Retro Replay Bot v29
+ * Retro Replay Bot v29.2
  * Discord.js v14
- * Event Cancel, Repost (copy signups), List Events (All / Upcoming)
+ * Event Cancel, Repost (copy signups), List Events
  ***********************/
 
 process.removeAllListeners('warning');
@@ -10,9 +10,14 @@ process.env.NODE_NO_WARNINGS = '1';
 require('dotenv').config();
 
 const {
-  Client, GatewayIntentBits, Partials,
-  EmbedBuilder, ActivityType,
-  REST, Routes, SlashCommandBuilder
+  Client,
+  GatewayIntentBits,
+  Partials,
+  EmbedBuilder,
+  ActivityType,
+  REST,
+  Routes,
+  SlashCommandBuilder
 } = require('discord.js');
 
 const fs = require('fs');
@@ -28,38 +33,58 @@ const TIMEZONE = 'America/New_York';
 const DATA_FILE = path.join(__dirname, 'scheduled_events.json');
 const SIGNUP_CHANNEL = config.signupChannelId;
 
+/* ───────── STARTUP SAFETY CHECKS ───────── */
+if (!config.token || !config.clientId) {
+  console.error('❌ Missing BOT_TOKEN or CLIENT_ID in .env');
+  process.exit(1);
+}
+
+if (!SIGNUP_CHANNEL) {
+  console.error('❌ signupChannelId missing from config.json');
+  process.exit(1);
+}
+
 /* ───────── CLIENT ───────── */
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent,
-    GatewayIntentBits.GuildMessageReactions,
-    GatewayIntentBits.DirectMessages
+    GatewayIntentBits.GuildMessageReactions
   ],
   partials: [Partials.Message, Partials.Reaction, Partials.Channel]
 });
 
 /* ───────── STORAGE ───────── */
 let events = {};
+
 function loadEvents() {
   if (!fs.existsSync(DATA_FILE)) return;
-  try { events = JSON.parse(fs.readFileSync(DATA_FILE)); }
-  catch { events = {}; }
+  try {
+    events = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
+  } catch (err) {
+    console.error('❌ Failed to read events file:', err);
+    events = {};
+  }
 }
+
 function saveEvents() {
   fs.writeFileSync(DATA_FILE, JSON.stringify(events, null, 2));
 }
+
 loadEvents();
 
 /* ───────── PERMISSIONS ───────── */
 function hasEventPermission(member) {
-  return member?.roles.cache.some(r =>
-    config.eventCreatorRoles.map(x => x.toLowerCase()).includes(r.name.toLowerCase())
+  if (!member) return false;
+  return member.roles.cache.some(role =>
+    config.eventCreatorRoles
+      .map(r => r.toLowerCase())
+      .includes(role.name.toLowerCase())
   );
 }
 
-/* ───────── ROLES ───────── */
+/* ───────── ROLE EMOJIS ───────── */
 const roleConfig = {
   '1️⃣': 'Active Manager',
   '2️⃣': 'Backup Manager',
@@ -71,21 +96,30 @@ const roleConfig = {
 
 /* ───────── HELPERS ───────── */
 function formatEST(ms) {
-  return DateTime.fromMillis(ms).setZone(TIMEZONE).toFormat('dd-MM-yyyy hh:mm a');
+  return DateTime.fromMillis(ms)
+    .setZone(TIMEZONE)
+    .toFormat('dd-MM-yyyy hh:mm a');
 }
 
-function buildSignupList(signups) {
-  return Object.entries(roleConfig).map(([emoji, role]) => {
-    const users = signups[role] || [];
-    return `**${emoji} ${role}:**\n${
-      users.length ? users.map(u => `• <@${u}>`).join('\n') : '*No signups yet*'
-    }`;
-  }).join('\n\n');
+function buildSignupList(signups = {}) {
+  return Object.entries(roleConfig)
+    .map(([emoji, role]) => {
+      const users = signups[role] || [];
+      return `**${emoji} ${role}:**\n${
+        users.length
+          ? users.map(id => `• <@${id}>`).join('\n')
+          : '*No signups yet*'
+      }`;
+    })
+    .join('\n\n');
 }
 
 async function fetchChannelSafe(id) {
-  try { return await client.channels.fetch(id); }
-  catch { return null; }
+  try {
+    return await client.channels.fetch(id);
+  } catch {
+    return null;
+  }
 }
 
 async function updateEmbed(messageId) {
@@ -113,15 +147,11 @@ async function updateEmbed(messageId) {
 
 function getSortedEvents({ upcomingOnly = false } = {}) {
   const now = Date.now();
-
   return Object.entries(events)
     .map(([id, ev]) => ({ id, ...ev }))
-    .filter(ev => {
-      if (upcomingOnly) {
-        return !ev.cancelled && ev.datetime > now;
-      }
-      return true;
-    })
+    .filter(ev =>
+      upcomingOnly ? !ev.cancelled && ev.datetime > now : true
+    )
     .sort((a, b) => a.datetime - b.datetime);
 }
 
@@ -159,10 +189,15 @@ const commands = [
 
 const rest = new REST({ version: '10' }).setToken(config.token);
 (async () => {
-  await rest.put(
-    Routes.applicationCommands(config.clientId),
-    { body: commands.map(c => c.toJSON()) }
-  );
+  try {
+    await rest.put(
+      Routes.applicationCommands(config.clientId),
+      { body: commands.map(c => c.toJSON()) }
+    );
+    console.log('✅ Slash commands registered');
+  } catch (err) {
+    console.error('❌ Failed to register commands:', err);
+  }
 })();
 
 /* ───────── INTERACTIONS ───────── */
@@ -181,15 +216,10 @@ client.on('interactionCreate', async interaction => {
       return interaction.reply({ content: '📭 No events found.', ephemeral: true });
 
     let output = list.map(ev =>
-      `**${ev.title}**\n` +
-      `🕒 ${formatEST(ev.datetime)} (EST)\n` +
-      `🆔 \`${ev.id}\`\n` +
-      `${ev.cancelled ? '❌ CANCELLED' : '✅ ACTIVE'}`
+      `**${ev.title}**\n🕒 ${formatEST(ev.datetime)} (EST)\n🆔 \`${ev.id}\`\n${ev.cancelled ? '❌ CANCELLED' : '✅ ACTIVE'}`
     ).join('\n\n');
 
-    if (output.length > 1900) {
-      output = output.slice(0, 1900) + '\n…';
-    }
+    if (output.length > 1900) output = output.slice(0, 1900) + '\n…';
 
     return interaction.reply({ content: output, ephemeral: true });
   }
@@ -218,18 +248,27 @@ client.on('interactionCreate', async interaction => {
     });
   }
 
-  /* ── REPOST EVENT ── */
+  /* ── REPOST EVENT (EVENT CREATOR ROLES ONLY) ── */
   if (interaction.commandName === 'repostevent') {
     if (!hasEventPermission(interaction.member))
-      return interaction.reply({ content: '❌ No permission.', ephemeral: true });
+      return interaction.reply({
+        content: '❌ Only event creators can repost events.',
+        ephemeral: true
+      });
 
     const ev = getEarliestUpcomingEvent();
     if (!ev)
-      return interaction.reply({ content: '❌ No upcoming events.', ephemeral: true });
+      return interaction.reply({
+        content: '❌ No upcoming events to repost.',
+        ephemeral: true
+      });
 
     const channel = await fetchChannelSafe(ev.channelId || SIGNUP_CHANNEL);
     if (!channel)
-      return interaction.reply({ content: '❌ Cannot access channel.', ephemeral: true });
+      return interaction.reply({
+        content: '❌ Cannot access signup channel.',
+        ephemeral: true
+      });
 
     const embed = new EmbedBuilder()
       .setColor(0x00b0f4)
@@ -300,8 +339,4 @@ client.once('ready', () => {
 });
 
 /* ───────── LOGIN ───────── */
-if (!config.token || !config.clientId) {
-  console.error('❌ Missing BOT_TOKEN or CLIENT_ID');
-  process.exit(1);
-}
 client.login(config.token);
