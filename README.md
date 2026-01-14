@@ -193,10 +193,16 @@ Example:
 
 1. Clone this repository.
 2. Install dependencies:
-
+3. create .env file
+```
+BOT_TOKEN=YOUR_BOT_TOKEN
+CLIENT_ID=BOT_ID
+```
+4.
 ```bash
 npm install discord.js
 ```
-3. Create config.json with your bot token, client ID, signup channel, open days, and event creator roles.
-4. Run the bot:
-```node bot.js
+5. Run the bot:
+```
+node bot.js
+```
