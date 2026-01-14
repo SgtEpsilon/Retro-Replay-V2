@@ -3,18 +3,10 @@
   "clientId": "",
   "signupChannelId": "1460772328517533893",
   "openDays": ["Tuesday", "Friday", "Saturday", "Sunday"],
-  "eventCreatorRoles": ["Owner", "Head Manager", "Manager"],
-  "roleCaps": {
-    "Active Manager": 1,
-    "Backup Manager": 1,
-    "Bouncer": 2,
-    "Bartender": 2,
-    "Dancer": 4,
-    "DJ": 1
-  }
-  "flexSignupRoles": {
-  "Active Manager": ["Bartender", "Bouncer"],
-  "Backup Manager": ["Bartender", "Bouncer"]
-}
-
+  "eventCreatorRoles": [
+    "Owner",
+    "Head Manager",
+    "Manager"
+  ],
+  "barStaffRoleId": "1460800862430560360"
 }
