@@ -12,4 +12,9 @@
     "Dancer": 4,
     "DJ": 1
   }
+  "flexSignupRoles": {
+  "Active Manager": ["Bartender", "Bouncer"],
+  "Backup Manager": ["Bartender", "Bouncer"]
+}
+
 }

@@ -1,16 +1,16 @@
 {
-  "example_event_id": {
-    "title": "Sample Retro Replay Event",
-    "datetime": "2026-01-15T14:00:00.000Z",
+  "1461041160591249428": {
+    "title": "Test",
+    "datetime": 1768615200000,
+    "channelId": "1460772328517533893",
     "signups": {
       "Active Manager": [],
-      "Backup Manager": [],
       "Bouncer": [],
       "Bartender": [],
       "Dancer": [],
-      "DJ": []
+      "DJ": [],
+      "Backup Manager": []
     },
-    "cancelled": false,
-    "channelId": "1460772328517533893"
+    "cancelled": false
   }
-]
+}

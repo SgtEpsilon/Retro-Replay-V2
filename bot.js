@@ -1,64 +1,110 @@
 /***********************
- * Retro Replay Bot v29.3
+ * Retro Replay Bot v29.4
  * Discord.js v14
  * Event Cancel, Repost (copy signups), List Events
  ***********************/
-require('dotenv').config();
 process.removeAllListeners('warning');
 process.env.NODE_NO_WARNINGS = '1';
 
-const { Client, GatewayIntentBits, Partials, ActivityType, REST, Routes } = require('discord.js');
+require('dotenv').config();
+
+const {
+  Client,
+  GatewayIntentBits,
+  Partials,
+  ActivityType
+} = require('discord.js');
+
 const config = require('./config.json');
-const { loadEvents } = require('./services/eventStore');
-const interactionHandler = require('./handlers/interactionHandler');
-const reactionHandler = require('./handlers/reactionHandler');
 
-config.token = process.env.BOT_TOKEN;
-config.clientId = process.env.CLIENT_ID;
-
-if (!config.token || !config.clientId) {
-  console.error('❌ Missing BOT_TOKEN or CLIENT_ID');
-  process.exit(1);
-}
-
+/* ───────── CLIENT (MUST COME FIRST) ───────── */
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent,
-    GatewayIntentBits.GuildMessageReactions
+    GatewayIntentBits.GuildMessageReactions,
+    GatewayIntentBits.MessageContent
   ],
-  partials: [Partials.Message, Partials.Reaction, Partials.Channel]
+  partials: [
+    Partials.Message,
+    Partials.Reaction,
+    Partials.Channel
+  ]
 });
 
-loadEvents();
+/* ───────── HANDLERS ───────── */
+const interactionHandler = require('./handlers/interactionHandler');
+const reactionHandler = require('./handlers/reactionHandler');
 
-client.on('interactionCreate', i => interactionHandler(client, i));
-client.on('messageReactionAdd', (...args) => reactionHandler.add(...args));
-client.on('messageReactionRemove', (...args) => reactionHandler.remove(...args));
+/* ───────── INTERACTIONS ───────── */
+client.on('interactionCreate', async interaction => {
+  try {
+    await interactionHandler(interaction);
+  } catch (err) {
+    console.error('❌ Interaction handler error:', err);
+  }
+});
 
-client.once('ready', async () => {
+const fs = require('fs');
+const path = require('path');
+
+/* ───────── LOAD COMMANDS ───────── */
+client.commands = new Map();
+
+const commandsPath = path.join(__dirname, 'commands');
+
+if (!fs.existsSync(commandsPath)) {
+  console.error('❌ commands folder not found:', commandsPath);
+} else {
+  const commandFiles = fs
+    .readdirSync(commandsPath)
+    .filter(file => file.endsWith('.js'));
+
+  console.log('📦 Loading commands:', commandFiles);
+
+  for (const file of commandFiles) {
+    const filePath = path.join(commandsPath, file);
+
+    try {
+      const command = require(filePath);
+
+      if (!command.data || !command.execute) {
+        console.warn(`⚠️ Invalid command file skipped: ${file}`);
+        continue;
+      }
+
+      client.commands.set(command.data.name, command);
+      console.log(`✅ Loaded command: ${command.data.name}`);
+
+    } catch (err) {
+      console.error(`❌ Failed to load command ${file}:`, err);
+    }
+  }
+}
+
+
+/* ───────── REACTIONS ───────── */
+client.on('messageReactionAdd', (reaction, user) =>
+  reactionHandler.add(reaction, user)
+);
+
+client.on('messageReactionRemove', (reaction, user) =>
+  reactionHandler.remove(reaction, user)
+);
+
+/* ───────── READY ───────── */
+client.once('ready', () => {
   console.log(`✅ Logged in as ${client.user.tag}`);
   client.user.setPresence({
     activities: [{ name: 'Retro Replay', type: ActivityType.Watching }],
     status: 'online'
   });
-
-const commands = [
-  require('./commands/createevent'),
-  require('./commands/cancelevent'),
-  require('./commands/repostevent'),
-  require('./commands/listevents')
-];
-
-
-  const rest = new REST({ version: '10' }).setToken(config.token);
-  await rest.put(
-    Routes.applicationCommands(config.clientId),
-    { body: commands.map(c => c.data.toJSON()) }
-  );
-
-  console.log('✅ Slash commands registered');
 });
 
-client.login(config.token);
+/* ───────── LOGIN ───────── */
+if (!process.env.BOT_TOKEN) {
+  console.error('❌ BOT_TOKEN missing from .env');
+  process.exit(1);
+}
+
+client.login(process.env.BOT_TOKEN);
