@@ -1,5 +1,19 @@
 {
+  "name": "retro-replay-bot",
+  "version": "1.0.0",
+  "description": "Retro Replay Discord Bot with shift signups and event management",
+  "main": "bot.js",
+  "scripts": {
+    "start": "node bot.js"
+  },
+  "author": "Your Name",
+  "license": "MIT",
   "dependencies": {
-    "discord.js": "^14.25.1"
+    "discord.js": "^14.25.1",
+    "dotenv": "^17.2.3",
+    "node-schedule": "^2.1.1"
+  },
+  "engines": {
+    "node": ">=18.0.0"
   }
 }

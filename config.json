@@ -1,10 +1,4 @@
 {
-<<<<<<< Updated upstream
-  "token": "BOT_TOKEN",
-  "signupChannelId": "CHANNEL_ID",
-    "openDays": ["Tuesday", "Friday", "Saturday", "Sunday"]
-}
-=======
   "token": "",
   "clientId": "",
   "signupChannelId": "1452021565486268637",
@@ -15,4 +9,3 @@
     "Manager"
   ]
 }
->>>>>>> Stashed changes
