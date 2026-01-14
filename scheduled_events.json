@@ -12,50 +12,5 @@
     },
     "cancelled": false,
     "channelId": "1460772328517533893"
-  },
-  "1460908454905643101": {
-    "title": "Sample Retro Replay Event",
-    "datetime": "2026-01-15T14:00:00.000Z",
-    "signups": {
-      "Active Manager": [],
-      "Backup Manager": [],
-      "Bouncer": [],
-      "Bartender": [],
-      "Dancer": [],
-      "DJ": []
-    },
-    "cancelled": false,
-    "channelId": "1460772328517533893"
-  },
-  "1460908487679807590": {
-    "title": "Sample Retro Replay Event",
-    "datetime": "2026-01-15T14:00:00.000Z",
-    "signups": {
-      "Active Manager": [],
-      "Backup Manager": [],
-      "Bouncer": [],
-      "Bartender": [],
-      "Dancer": [],
-      "DJ": []
-    },
-    "cancelled": true,
-    "channelId": "1460772328517533893"
-  },
-  "1460916042665562300": {
-    "title": "Test",
-    "datetime": 1768442400000,
-    "channelId": "1460772328517533893",
-    "signups": {
-      "DJ": [],
-      "Active Manager": []
-    },
-    "cancelled": false
-  },
-  "1460917274696486990": {
-    "title": "Test",
-    "datetime": 1768442400000,
-    "channelId": "1460772328517533893",
-    "signups": {},
-    "cancelled": false
   }
 }

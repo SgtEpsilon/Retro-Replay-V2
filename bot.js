@@ -1,8 +1,9 @@
 /***********************
- * Retro Replay Bot v22
+ * Retro Replay Bot v26
  * Discord.js v14 Compatible
- * DST-Safe Daily Shifts
+ * DST-Safe Daily Shifts using Luxon
  * .env for BOT_TOKEN & CLIENT_ID
+ * /createevent pre-fills next shift
  ***********************/
 process.removeAllListeners('warning');
 process.env.NODE_NO_WARNINGS = '1';
@@ -19,6 +20,7 @@ const {
 const fs = require('fs');
 const path = require('path');
 const schedule = require('node-schedule');
+const { DateTime } = require('luxon'); // DST-safe time handling
 const config = require('./config.json');
 
 // Override sensitive values from .env
@@ -76,44 +78,25 @@ const roleConfig = {
 /* ───────── TIME HELPERS ───────── */
 function formatEST(date) {
   if (!(date instanceof Date) || isNaN(date.getTime())) return 'Invalid Date';
-  const parts = new Intl.DateTimeFormat('en-GB', {
-    timeZone: TIMEZONE,
-    day: '2-digit', month: '2-digit', year: 'numeric',
-    hour: '2-digit', minute: '2-digit', hour12: true
-  }).formatToParts(date);
-
-  let day, month, year, hour, minute, dayPeriod;
-  for (const p of parts) {
-    if (p.type === 'day') day = p.value;
-    if (p.type === 'month') month = p.value;
-    if (p.type === 'year') year = p.value;
-    if (p.type === 'hour') hour = p.value;
-    if (p.type === 'minute') minute = p.value;
-    if (p.type === 'dayPeriod') dayPeriod = p.value;
-  }
-  return `${day}-${month}-${year} ${hour}:${minute} ${dayPeriod}`;
+  const dt = DateTime.fromJSDate(date).setZone(TIMEZONE);
+  return dt.toFormat('dd-MM-yyyy hh:mm a');
 }
 
 function getTodayUnix() { return Math.floor(Date.now() / 1000); }
 
 function isOpenToday(openDays) {
-  const today = new Date().toLocaleString('en-US', { timeZone: TIMEZONE, weekday: 'long' });
+  const today = DateTime.now().setZone(TIMEZONE).toFormat('cccc');
   return openDays.some(d => d.toLowerCase() === today.toLowerCase());
 }
 
 function getNextOpenDayUnix(openDays) {
-  const map = { sunday: 0, monday: 1, tuesday: 2, wednesday: 3, thursday: 4, friday: 5, saturday: 6 };
-  const now = new Date();
-  const todayEST = new Date(now.toLocaleString('en-US', { timeZone: TIMEZONE }));
-  const todayDay = todayEST.getDay();
-  const openIdx = openDays.map(d => map[d.toLowerCase()]);
+  const now = DateTime.now().setZone(TIMEZONE);
   for (let i = 0; i < 7; i++) {
-    const day = (todayDay + i) % 7;
-    if (openIdx.includes(day)) {
-      const nextEST = new Date(todayEST);
-      nextEST.setDate(nextEST.getDate() + i);
-      nextEST.setHours(21, 0, 0, 0); // 9 PM EST
-      return nextEST;
+    const nextDay = now.plus({ days: i });
+    const weekday = nextDay.toFormat('cccc').toLowerCase();
+    if (openDays.map(d => d.toLowerCase()).includes(weekday)) {
+      const shiftTime = nextDay.set({ hour: 21, minute: 0, second: 0, millisecond: 0 });
+      return shiftTime.toSeconds();
     }
   }
   return null;
@@ -178,15 +161,39 @@ client.tempEvent = {};
 client.on('interactionCreate', async interaction => {
 
   if (interaction.isChatInputCommand()) {
+
     if (interaction.commandName === 'createevent') {
-      const member = interaction.member;
-      if (!hasEventPermission(member)) return interaction.reply({ content: '❌ You do not have permission.', ephemeral: true });
+      if (!hasEventPermission(interaction.member))
+        return interaction.reply({ content: '❌ You do not have permission.', ephemeral: true });
 
-      const modal = new ModalBuilder().setCustomId('create_event_modal').setTitle('Create New Event');
-      const titleInput = new TextInputBuilder().setCustomId('event_title').setLabel("Event Title").setStyle(TextInputStyle.Short).setRequired(true);
-      const dateInput = new TextInputBuilder().setCustomId('event_date').setLabel("Event Date (DD-MM-YYYY HH:MM)").setStyle(TextInputStyle.Short).setRequired(true);
+      const modal = new ModalBuilder()
+        .setCustomId('create_event_modal')
+        .setTitle('Create New Event');
 
-      modal.addComponents(new ActionRowBuilder().addComponents(titleInput), new ActionRowBuilder().addComponents(dateInput));
+      // Pre-fill date with next open shift
+      const openDays = config.openDays;
+      const nextShiftUnix = getNextOpenDayUnix(openDays);
+      const nextShiftDT = DateTime.fromSeconds(nextShiftUnix).setZone(TIMEZONE);
+      const defaultDateStr = nextShiftDT.toFormat('dd-MM-yyyy HH:mm');
+
+      const titleInput = new TextInputBuilder()
+        .setCustomId('event_title')
+        .setLabel("Event Title")
+        .setStyle(TextInputStyle.Short)
+        .setRequired(true);
+
+      const dateInput = new TextInputBuilder()
+        .setCustomId('event_date')
+        .setLabel("Event Date (DD-MM-YYYY HH:MM)")
+        .setStyle(TextInputStyle.Short)
+        .setRequired(true)
+        .setValue(defaultDateStr); // pre-fill
+
+      modal.addComponents(
+        new ActionRowBuilder().addComponents(titleInput),
+        new ActionRowBuilder().addComponents(dateInput)
+      );
+
       await interaction.showModal(modal);
     }
 
@@ -196,15 +203,15 @@ client.on('interactionCreate', async interaction => {
 
       const todayUnix = getTodayUnix();
       const openToday = isOpenToday(openDays);
-
-      const nextDate = getNextOpenDayUnix(openDays);
-      const nextUnix = nextDate ? Math.floor(nextDate.getTime() / 1000) : null;
+      const nextUnix = getNextOpenDayUnix(openDays);
 
       await interaction.reply(
         `📅 **Open Days:** ${openDays.join(', ')}\n` +
         `🕒 **Today is:** <t:${todayUnix}:F>\n` +
         (openToday ? '✅ **OPEN TODAY**' : '❌ **CLOSED TODAY**') + '\n' +
-        (nextUnix ? `⏳ **Next Shift:** <t:${nextUnix}:R> (<t:${nextUnix}:F>)` : '❌ No upcoming shifts found.')
+        (nextUnix ? `⏳ **Next Shift:** <t:${nextUnix}:R> (<t:${nextUnix}:F>)` : '❌ No upcoming shifts found.') + '\n' +
+        `• Signup sheets are automatically posted at **5 PM GMT** on open days: **${openDays.join(', ')}**\n` +
+        `• Make sure to sign up for your roles in time.`
       );
     }
   }
@@ -216,11 +223,11 @@ client.on('interactionCreate', async interaction => {
     if (!match) return interaction.reply({ content: '❌ Invalid date format. Use DD-MM-YYYY HH:MM', ephemeral: true });
 
     const [ , day, month, year, hour, minute ] = match;
-    const datetime = new Date(`${year}-${month}-${day}T${hour}:${minute}:00-05:00`);
-    if (isNaN(datetime.getTime())) return interaction.reply({ content: '❌ Invalid date/time.', ephemeral: true });
+    const datetime = DateTime.fromISO(`${year}-${month}-${day}T${hour}:${minute}:00`, { zone: TIMEZONE });
+    if (!datetime.isValid) return interaction.reply({ content: '❌ Invalid date/time.', ephemeral: true });
 
     const embed = new EmbedBuilder().setColor(0x00b0f4).setTitle(title)
-      .setDescription(`🕒 **When:** ${formatEST(datetime)} (EST)\n\n${buildSignupList({})}`).setTimestamp();
+      .setDescription(`🕒 **When:** ${datetime.toFormat('dd-MM-yyyy hh:mm a')} (EST)\n\n${buildSignupList({})}`).setTimestamp();
 
     const row = new ActionRowBuilder().addComponents(
       new ButtonBuilder().setCustomId('confirm_event').setLabel('✅ Confirm').setStyle(ButtonStyle.Success),
@@ -235,15 +242,15 @@ client.on('interactionCreate', async interaction => {
     const temp = client.tempEvent?.[interaction.user.id];
     if (!temp) return interaction.reply({ content: '❌ No event to confirm.', ephemeral: true });
 
-    const channel = await fetchChannelSafe(SIGNUP_CHANNEL);
-    if (!channel) return interaction.reply({ content: '❌ Cannot access signup channel.', ephemeral: true });
-
     if (interaction.customId === 'confirm_event') {
+      const channel = await fetchChannelSafe(SIGNUP_CHANNEL);
+      if (!channel) return interaction.reply({ content: '❌ Cannot access signup channel.', ephemeral: true });
+
       const embed = new EmbedBuilder().setColor(0x00b0f4).setTitle(temp.title)
-        .setDescription(`🕒 **When:** ${formatEST(temp.datetime)} (EST)\n\n${buildSignupList({})}`).setTimestamp();
+        .setDescription(`🕒 **When:** ${temp.datetime.toFormat('dd-MM-yyyy hh:mm a')} (EST)\n\n${buildSignupList({})}`).setTimestamp();
 
       const msg = await channel.send({ embeds: [embed] });
-      events[msg.id] = { title: temp.title, datetime: temp.datetime.getTime(), channelId: channel.id, signups: {}, cancelled: false };
+      events[msg.id] = { title: temp.title, datetime: temp.datetime.toMillis(), channelId: channel.id, signups: {}, cancelled: false };
       saveEvents();
 
       for (const emoji of Object.keys(roleConfig)) await msg.react(emoji);
@@ -264,7 +271,6 @@ client.on('messageReactionAdd', async (reaction, user) => {
   if (user.bot) return;
   const ev = events[reaction.message.id]; if (!ev) return;
   const role = roleConfig[reaction.emoji.name]; if (!role) return;
-
   if (!ev.signups[role]) ev.signups[role] = [];
   if (!ev.signups[role].includes(user.id)) ev.signups[role].push(user.id);
   await updateEmbed(reaction.message.id);
@@ -275,7 +281,6 @@ client.on('messageReactionRemove', async (reaction, user) => {
   if (user.bot) return;
   const ev = events[reaction.message.id]; if (!ev) return;
   const role = roleConfig[reaction.emoji.name]; if (!role) return;
-
   if (ev.signups[role]) ev.signups[role] = ev.signups[role].filter(id => id !== user.id);
   await updateEmbed(reaction.message.id);
   saveEvents();
@@ -284,36 +289,31 @@ client.on('messageReactionRemove', async (reaction, user) => {
 /* ───────── DST-SAFE DAILY SHIFT POSTS ───────── */
 function scheduleDailyShifts() {
   const openDays = config.openDays.map(d => d.toLowerCase());
-
-  schedule.scheduleJob('0 21 * * *', async () => { // 21:00 EST daily
-    const todayEST = new Date().toLocaleString('en-US', { timeZone: TIMEZONE });
-    const todayDayName = new Date(todayEST).toLocaleString('en-US', { timeZone: TIMEZONE, weekday: 'long' }).toLowerCase();
-
-    if (!openDays.includes(todayDayName)) return;
+  schedule.scheduleJob('0 21 * * *', async () => { // 21:00 EST = 5 PM GMT
+    const nowEST = DateTime.now().setZone(TIMEZONE);
+    const todayName = nowEST.toFormat('cccc').toLowerCase();
+    if (!openDays.includes(todayName)) return;
 
     const channel = await fetchChannelSafe(SIGNUP_CHANNEL);
     if (!channel) return;
 
-    const dayCapitalized = todayDayName.charAt(0).toUpperCase() + todayDayName.slice(1);
+    const dayCapitalized = todayName.charAt(0).toUpperCase() + todayName.slice(1);
     const title = `[${dayCapitalized}] Shift Signup`;
 
-    const shiftTime = new Date(todayEST);
-    shiftTime.setHours(21, 0, 0, 0); // 9 PM EST
-    const shiftUnix = Math.floor(shiftTime.getTime() / 1000);
+    const shiftTime = nowEST.set({ hour: 21, minute: 0, second: 0, millisecond: 0 });
 
     const embed = new EmbedBuilder()
       .setColor(0x00b0f4)
       .setTitle(title)
-      .setDescription(`🕒 **Shift starts:** <t:${shiftUnix}:F> (<t:${shiftUnix}:R>)\n\n${buildSignupList({})}`)
+      .setDescription(`🕒 **Shift starts:** ${shiftTime.toFormat('dd-MM-yyyy hh:mm a')} (EST)\n\n${buildSignupList({})}`)
       .setTimestamp();
 
     const msg = await channel.send({ embeds: [embed] });
-    events[msg.id] = { title, datetime: shiftTime.getTime(), channelId: channel.id, signups: {}, cancelled: false };
+    events[msg.id] = { title, datetime: shiftTime.toMillis(), channelId: channel.id, signups: {}, cancelled: false };
     saveEvents();
 
     for (const emoji of Object.keys(roleConfig)) await msg.react(emoji);
-
-    console.log(`✅ Posted daily shift signup for ${dayCapitalized} at 21:00 EST`);
+    console.log(`✅ Posted daily shift signup for ${dayCapitalized} at ${shiftTime.toFormat('hh:mm a')} EST`);
   });
 }
 
@@ -335,12 +335,6 @@ client.once('ready', () => {
 });
 
 /* ───────── LOGIN ───────── */
-if (!config.token) {
-  console.error("❌ Missing BOT_TOKEN in .env");
-  process.exit(1);
-}
-if (!config.clientId) {
-  console.error("❌ Missing CLIENT_ID in .env");
-  process.exit(1);
-}
+if (!config.token) { console.error("❌ Missing BOT_TOKEN in .env"); process.exit(1); }
+if (!config.clientId) { console.error("❌ Missing CLIENT_ID in .env"); process.exit(1); }
 client.login(config.token);
