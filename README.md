@@ -1,4 +1,4 @@
-# 🎉 Retro Replay Bot Rewrite V2.2.2
+# 🎉 Retro Replay Bot Rewrite V2.3.0
 
 A comprehensive **Discord.js v14** bot designed for managing bar/club staff scheduling with **emoji-based signups**, **automated shift posting**, **backup alerts**, **role management**, and **detailed shift logging**.
 
@@ -356,7 +356,7 @@ The bot creates and manages several JSON files:
 
 ## 🔄 Version History
 
-**V2.2.2** (Current)
+**V2.3.0** (Current)
 - Changed auto-posting from weekly to daily
 - Added `/addblackout`, `/removeblackout`, `/listblackouts` commands
 - Added `/setstatus` and `/statusclear` commands
