@@ -1,5 +1,5 @@
 /***********************
- * Retro Replay Bot Rewrite V2.1.2
+ * Retro Replay Bot Rewrite V2.3.0
  * Discord.js v14
  ***********************/
 
@@ -31,20 +31,28 @@ const config = require('./config.json');
 /* ───────── CONFIG ───────── */
 const TOKEN = process.env.BOT_TOKEN;
 const CLIENT_ID = process.env.CLIENT_ID;
-const TIMEZONE = 'America/New_York';
+
+const TIMEZONE = config.timezone;
+const AUTO_POST_TIMEZONE = config.autoPostTimezone;
+const AUTO_POST_HOUR = config.autoPostHour;
+const SHIFT_START_HOUR = config.shiftStartHour;
+
 const DATA_FILE = path.join(__dirname, 'scheduled_events.json');
 const AUTO_POST_FILE = path.join(__dirname, 'auto_posted.json');
 const BLACKOUT_FILE = path.join(__dirname, 'blackout_dates.json');
 const SHIFT_LOG_FILE = path.join(__dirname, 'shift_logs.json');
-const SIGNUP_CHANNEL = config.signupChannelId;
-const BAR_STAFF_ROLE_ID = config.barStaffRoleId;
+const DISABLED_ROLES_FILE = path.join(__dirname, 'disabled_roles.json');
+
+const SIGNUP_CHANNEL = process.env.SIGNUP_CHANNEL_ID;
+const BAR_STAFF_ROLE_ID = process.env.BAR_STAFF_ROLE_ID;
 
 /* ───────── CLIENT ───────── */
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.GuildMessageReactions
+    GatewayIntentBits.GuildMessageReactions,
+    GatewayIntentBits.MessageContent
   ],
   partials: [Partials.Message, Partials.Reaction, Partials.Channel]
 });
@@ -56,63 +64,70 @@ let backupAlertTimers = {};
 let autoPosted = {};
 let blackoutDates = [];
 let shiftLogs = [];
+let disabledRoles = [];
+let customStatus = null;
 
-if (fs.existsSync(DATA_FILE)) {
+function load(file, fallback) {
   try {
-    events = JSON.parse(fs.readFileSync(DATA_FILE));
-  } catch {
-    events = {};
+    return fs.existsSync(file) ? JSON.parse(fs.readFileSync(file)) : fallback;
+  } catch (err) {
+    console.error(`⚠️ Error loading ${file}:`, err.message);
+    return fallback;
   }
 }
 
-if (fs.existsSync(AUTO_POST_FILE)) {
+events = load(DATA_FILE, {});
+autoPosted = load(AUTO_POST_FILE, {});
+blackoutDates = load(BLACKOUT_FILE, []);
+shiftLogs = load(SHIFT_LOG_FILE, []);
+disabledRoles = load(DISABLED_ROLES_FILE, []);
+
+const save = (file, data) => {
   try {
-    autoPosted = JSON.parse(fs.readFileSync(AUTO_POST_FILE));
-  } catch {
-    autoPosted = {};
+    fs.writeFileSync(file, JSON.stringify(data, null, 2));
+  } catch (err) {
+    console.error(`⚠️ Error saving ${file}:`, err.message);
   }
-}
+};
 
-if (fs.existsSync(BLACKOUT_FILE)) {
-  try {
-    blackoutDates = JSON.parse(fs.readFileSync(BLACKOUT_FILE));
-  } catch {
-    blackoutDates = [];
-  }
-}
-
-if (fs.existsSync(SHIFT_LOG_FILE)) {
-  try {
-    shiftLogs = JSON.parse(fs.readFileSync(SHIFT_LOG_FILE));
-  } catch {
-    shiftLogs = [];
-  }
-}
-
-function saveEvents() {
-  fs.writeFileSync(DATA_FILE, JSON.stringify(events, null, 2));
-}
-
-function saveAutoPosted() {
-  fs.writeFileSync(AUTO_POST_FILE, JSON.stringify(autoPosted, null, 2));
-}
-
-function saveBlackoutDates() {
-  fs.writeFileSync(BLACKOUT_FILE, JSON.stringify(blackoutDates, null, 2));
-}
-
-function saveShiftLogs() {
-  fs.writeFileSync(SHIFT_LOG_FILE, JSON.stringify(shiftLogs, null, 2));
-}
-
-/* ───────── PERMISSIONS ───────── */
+/* ───────── HELPERS ───────── */
 function hasEventPermission(member) {
+  if (!member || !member.roles) return false;
   return member.roles.cache.some(r =>
     config.eventCreatorRoles.includes(r.name)
   );
 }
 
-/* ───────── ROLE EMOJIS ───────── */
+function formatTime(ms) {
+  return DateTime.fromMillis(ms)
+    .setZone(TIMEZONE)
+    .toFormat('dd-MM-yyyy h:mm a');
+}
+
+function isBlackoutDate(date) {
+  const checkDate = DateTime.fromMillis(date).setZone(TIMEZONE).toISODate();
+  return blackoutDates.some(bd => {
+    const blackout = DateTime.fromISO(bd, { zone: TIMEZONE }).toISODate();
+    return blackout === checkDate;
+  });
+}
+
+function setDefaultStatus() {
+  if (customStatus) return;
+  
+  try {
+    client.user.setPresence({
+      activities: [{
+        name: '🍸 Shifts at the Retro Bar',
+        type: ActivityType.Watching
+      }],
+      status: 'online'
+    });
+  } catch (err) {
+    console.error('⚠️ Error setting status:', err.message);
+  }
+}
+
 const roleConfig = {
   '1️⃣': 'Active Manager',
   '2️⃣': 'Backup Manager',
@@ -122,784 +137,742 @@ const roleConfig = {
   '6️⃣': 'DJ'
 };
 
-/* ───────── HELPERS ───────── */
-function formatEST(ms) {
-  return DateTime.fromMillis(ms)
-    .setZone(TIMEZONE)
-    .toFormat('cccc, LLL d @ h:mm a');
-}
-
 function buildSignupList(signups) {
   return Object.entries(roleConfig).map(([emoji, role]) => {
+    if (disabledRoles.includes(role))
+      return `**${emoji} ${role}:** ~~Disabled~~`;
+
     const users = signups[role] || [];
     return `**${emoji} ${role}:**\n${
       users.length
-        ? users.map(id => `• <@${id}>`).join('\n')
+        ? users.map(u => `• <@${u}>`).join('\n')
         : '*No signups yet*'
     }`;
   }).join('\n\n');
 }
 
-/* ───────── NEXT SHIFT HELPERS ───────── */
-function getNextShift() {
-  const openDays = config.openDays || [];
-  let now = DateTime.now().setZone(TIMEZONE);
-
-  for (let i = 0; i < 14; i++) {
-    const day = now.plus({ days: i });
-    const dateKey = day.toFormat('yyyy-MM-dd');
-    
-    if (openDays.includes(day.toFormat('cccc')) && !blackoutDates.includes(dateKey)) {
-      return day.set({ hour: 21, minute: 0, second: 0, millisecond: 0 });
+/* ───────── AUTO POST LOGIC ───────── */
+async function autoPostWeeklyShifts() {
+  try {
+    // Verify channel ID is set
+    if (!SIGNUP_CHANNEL) {
+      console.error('❌ SIGNUP_CHANNEL_ID not configured in .env');
+      return;
     }
+
+    const channel = await client.channels.fetch(SIGNUP_CHANNEL).catch(err => {
+      console.error('❌ Cannot access signup channel. Check bot permissions and channel ID.');
+      console.error('   Channel ID:', SIGNUP_CHANNEL);
+      console.error('   Error:', err.message);
+      return null;
+    });
+    
+    if (!channel) {
+      return;
+    }
+
+    // Check if bot has required permissions
+    if (!channel.permissionsFor(client.user).has(['SendMessages', 'AddReactions', 'ViewChannel'])) {
+      console.error('❌ Bot missing required permissions in signup channel');
+      console.error('   Required: View Channel, Send Messages, Add Reactions');
+      return;
+    }
+
+    const now = DateTime.now().setZone(AUTO_POST_TIMEZONE);
+    const today = now.toFormat('EEEE');
+    const dateKey = now.toISODate();
+
+    if (!config.openDays.includes(today)) {
+      console.log(`⭐️ Today (${today}) is not an open day, skipping auto-post.`);
+      return;
+    }
+
+    if (autoPosted[dateKey]) {
+      console.log(`✅ Already auto-posted for ${dateKey}`);
+      return;
+    }
+
+    if (isBlackoutDate(now.toMillis())) {
+      console.log(`🚫 Today (${dateKey}) is a blackout date, skipping auto-post.`);
+      return;
+    }
+
+    const shiftTime = now.set({ 
+      hour: SHIFT_START_HOUR, 
+      minute: 0, 
+      second: 0 
+    }).setZone(TIMEZONE);
+
+    const title = `🍸 ${today} Night Shift`;
+    const signups = Object.fromEntries(
+      Object.values(roleConfig).map(role => [role, []])
+    );
+
+    const embed = new EmbedBuilder()
+      .setColor(0x00b0f4)
+      .setTitle(title)
+      .setDescription(
+        `🕒 **When:** ${formatTime(shiftTime.toMillis())}\n\n${buildSignupList(signups)}`
+      )
+      .setFooter({ text: 'React to sign up!' });
+
+    const msg = await channel.send({ 
+      content: `<@&${BAR_STAFF_ROLE_ID}> New shift posted!`,
+      embeds: [embed] 
+    });
+
+    for (const emoji of Object.keys(roleConfig)) {
+      await msg.react(emoji);
+    }
+
+    events[msg.id] = {
+      id: msg.id,
+      title,
+      datetime: shiftTime.toMillis(),
+      channelId: channel.id,
+      signups,
+      cancelled: false
+    };
+
+    scheduleReminder(msg.id);
+    scheduleBackupAlert(msg.id);
+
+    save(DATA_FILE, events);
+    
+    autoPosted[dateKey] = Date.now();
+    save(AUTO_POST_FILE, autoPosted);
+
+    console.log(`✅ Auto-posted shift for ${today}, ${dateKey}`);
+  } catch (err) {
+    console.error('❌ Auto-post error:', err);
   }
-  return null;
 }
 
-function getAutoTitle(shiftDate) {
-  return `${shiftDate.toFormat('cccc')} Night Shift`;
+function scheduleAutoPost() {
+  setInterval(async () => {
+    const now = DateTime.now().setZone(AUTO_POST_TIMEZONE);
+    
+    if (now.hour === AUTO_POST_HOUR && now.minute < 10) {
+      await autoPostWeeklyShifts();
+    }
+  }, 10 * 60 * 1000);
 }
 
-function isTodayOpen() {
-  const now = DateTime.now().setZone(TIMEZONE);
-  const dateKey = now.toFormat('yyyy-MM-dd');
-  return config.openDays.includes(now.toFormat('cccc')) && !blackoutDates.includes(dateKey);
-}
-
-/* ───────── SHIFT LOGS ───────── */
-function logShift(eventId) {
-  const ev = events[eventId];
+/* ───────── SCHEDULING ───────── */
+function scheduleReminder(id) {
+  const ev = events[id];
   if (!ev || ev.cancelled) return;
-
-  const log = {
-    date: DateTime.fromMillis(ev.datetime).toFormat('yyyy-MM-dd'),
-    title: ev.title,
-    datetime: ev.datetime,
-    signups: JSON.parse(JSON.stringify(ev.signups)),
-    timestamp: Date.now()
-  };
-
-  shiftLogs.push(log);
-  saveShiftLogs();
-}
-
-/* ───────── BACKUP ALERTS ───────── */
-function scheduleBackupAlert(eventId) {
-  const ev = events[eventId];
-  if (!ev || ev.cancelled || backupAlertTimers[eventId]) return;
-
-  // Alert 2 hours before shift
-  const alertTime = ev.datetime - (2 * 60 * 60 * 1000);
-  const delay = alertTime - Date.now();
-  
-  if (delay <= 0) return;
-
-  backupAlertTimers[eventId] = setTimeout(async () => {
-    try {
-      const emptyRoles = Object.entries(roleConfig)
-        .map(([emoji, role]) => {
-          const signups = ev.signups[role] || [];
-          return signups.length === 0 ? role : null;
-        })
-        .filter(Boolean);
-
-      if (emptyRoles.length > 0) {
-        const channel = await client.channels.fetch(ev.channelId);
-        await channel.send(
-          `⚠️ **BACKUP NEEDED** - 2 hours until shift!\n` +
-          `Missing roles: **${emptyRoles.join(', ')}**\n` +
-          `<@&${BAR_STAFF_ROLE_ID}>`
-        );
-      }
-    } catch {}
-    delete backupAlertTimers[eventId];
-  }, delay);
-}
-
-/* ───────── AUTO POST EVENT ───────── */
-async function createAutoEvent(shiftDate) {
-  const title = getAutoTitle(shiftDate);
-  const unix = Math.floor(shiftDate.toSeconds());
-
-  const embed = new EmbedBuilder()
-    .setColor(0x00b0f4)
-    .setTitle(title)
-    .setDescription(
-      `🕒 **When:** ${formatEST(shiftDate.toMillis())} (EST)\n` +
-      `⏳ **Starts:** <t:${unix}:R>\n\n` +
-      buildSignupList({})
-    )
-    .setTimestamp();
-
-  const channel = await client.channels.fetch(SIGNUP_CHANNEL);
-  const msg = await channel.send({ embeds: [embed] });
-
-  events[msg.id] = {
-    title,
-    datetime: shiftDate.toMillis(),
-    channelId: channel.id,
-    signups: {},
-    cancelled: false
-  };
-
-  saveEvents();
-  scheduleReminder(msg.id);
-  scheduleBackupAlert(msg.id);
-
-  for (const emoji of Object.keys(roleConfig)) {
-    await msg.react(emoji);
-  }
-
-  console.log(`✅ Auto-posted event: ${title}`);
-}
-
-function checkAndAutoPost() {
-  const nowGMT = DateTime.now().setZone('Europe/London');
-  const nowEST = DateTime.now().setZone(TIMEZONE);
-  
-  if (nowGMT.hour !== 17 || nowGMT.minute !== 0) return;
-
-  const todayEST = nowEST.toFormat('cccc');
-  const dateKey = nowEST.toFormat('yyyy-MM-dd');
-  
-  // Check blackout dates
-  if (blackoutDates.includes(dateKey)) {
-    console.log(`⏸️ Skipping auto-post: ${dateKey} is blacked out`);
-    return;
-  }
-  
-  if (!config.openDays.includes(todayEST)) return;
-  if (autoPosted[dateKey]) return;
-
-  const shiftDate = nowEST.set({ hour: 21, minute: 0, second: 0, millisecond: 0 });
-
-  createAutoEvent(shiftDate).then(() => {
-    autoPosted[dateKey] = true;
-    saveAutoPosted();
-  }).catch(err => {
-    console.error('❌ Auto-post failed:', err);
-  });
-}
-
-/* ───────── BOT STATUS ───────── */
-const statuses = [
-  {
-    name: 'Drinking At The Bar',
-    type: ActivityType.Watching
-  },
-  {
-    name: 'Now Hiring',
-    type: ActivityType.Playing
-  }
-];
-
-let currentStatusIndex = 0;
-let customStatusTimer = null;
-let isCustomStatus = false;
-
-function rotateStatus() {
-  if (isCustomStatus) return; // Don't rotate if custom status is active
-  
-  const status = statuses[currentStatusIndex];
-  client.user.setActivity(status.name, { type: status.type });
-  currentStatusIndex = (currentStatusIndex + 1) % statuses.length;
-}
-
-function setCustomStatus(type, message, durationMinutes = 0) {
-  isCustomStatus = true;
-  
-  // Clear existing custom status timer
-  if (customStatusTimer) {
-    clearTimeout(customStatusTimer);
-    customStatusTimer = null;
-  }
-  
-  // Map string type to ActivityType
-  const activityTypes = {
-    'playing': ActivityType.Playing,
-    'watching': ActivityType.Watching,
-    'listening': ActivityType.Listening,
-    'competing': ActivityType.Competing
-  };
-  
-  client.user.setActivity(message, { type: activityTypes[type] });
-  
-  // If duration is set, revert after time expires
-  if (durationMinutes > 0) {
-    customStatusTimer = setTimeout(() => {
-      isCustomStatus = false;
-      rotateStatus();
-      console.log('✅ Custom status expired, resuming rotation');
-    }, durationMinutes * 60 * 1000);
-  }
-}
-
-function clearCustomStatus() {
-  if (customStatusTimer) {
-    clearTimeout(customStatusTimer);
-    customStatusTimer = null;
-  }
-  isCustomStatus = false;
-  rotateStatus();
-}
-
-/* ───────── REMINDERS ───────── */
-function scheduleReminder(eventId) {
-  const ev = events[eventId];
-  if (!ev || ev.cancelled || reminderTimers[eventId]) return;
 
   const delay = ev.datetime - Date.now();
   if (delay <= 0) return;
 
-  reminderTimers[eventId] = setTimeout(async () => {
+  reminderTimers[id] = setTimeout(async () => {
+    try {
+      const channel = await client.channels.fetch(ev.channelId);
+      await channel.send(`🔔 **Shift starting now!** <@&${BAR_STAFF_ROLE_ID}>`);
+      shiftLogs.push({ ...ev, timestamp: Date.now() });
+      save(SHIFT_LOG_FILE, shiftLogs);
+    } catch (err) {
+      console.error('⚠️ Reminder error:', err.message);
+    }
+  }, delay);
+}
+
+function scheduleBackupAlert(id) {
+  const ev = events[id];
+  if (!ev || ev.cancelled) return;
+
+  const alertTime = ev.datetime - 2 * 60 * 60 * 1000;
+  const delay = alertTime - Date.now();
+  if (delay <= 0) return;
+
+  backupAlertTimers[id] = setTimeout(async () => {
+    const missing = Object.values(roleConfig).filter(
+      r => !disabledRoles.includes(r) && !(ev.signups[r]?.length)
+    );
+    if (!missing.length) return;
+
     try {
       const channel = await client.channels.fetch(ev.channelId);
       await channel.send(
-        `🔔 **Shift starting now!** <@&${BAR_STAFF_ROLE_ID}>`
+        `⚠️ **BACKUP NEEDED**\nMissing: **${missing.join(', ')}**\n<@&${BAR_STAFF_ROLE_ID}>`
       );
-      
-      // Log the shift
-      logShift(eventId);
-    } catch {}
-    delete reminderTimers[eventId];
+    } catch (err) {
+      console.error('⚠️ Backup alert error:', err.message);
+    }
   }, delay);
 }
 
 /* ───────── SLASH COMMANDS ───────── */
 const commands = [
   new SlashCommandBuilder()
-    .setName('createevent')
-    .setDescription('Create a new event'),
+    .setName('mysignups')
+    .setDescription('View your upcoming signups'),
 
   new SlashCommandBuilder()
     .setName('nextshift')
-    .setDescription('Show the next shift time and countdown'),
+    .setDescription('View the next upcoming shift'),
 
   new SlashCommandBuilder()
-    .setName('shiftstats')
-    .setDescription('View signup statistics')
-    .addStringOption(option =>
-      option.setName('period')
-        .setDescription('Time period')
-        .setRequired(false)
-        .addChoices(
-          { name: 'Last 7 days', value: '7' },
-          { name: 'Last 30 days', value: '30' },
-          { name: 'All time', value: 'all' }
-        )),
+    .setName('areweopen')
+    .setDescription('Check if the bar is open today'),
 
   new SlashCommandBuilder()
-    .setName('blackout')
-    .setDescription('Manage blackout dates')
-    .addSubcommand(sub =>
-      sub.setName('add')
-        .setDescription('Add a blackout date')
-        .addStringOption(option =>
-          option.setName('date')
-            .setDescription('Date (YYYY-MM-DD)')
-            .setRequired(true)))
-    .addSubcommand(sub =>
-      sub.setName('remove')
-        .setDescription('Remove a blackout date')
-        .addStringOption(option =>
-          option.setName('date')
-            .setDescription('Date (YYYY-MM-DD)')
-            .setRequired(true)))
-    .addSubcommand(sub =>
-      sub.setName('list')
-        .setDescription('List all blackout dates')),
+    .setName('cancelevent')
+    .setDescription('Cancel an event')
+    .addStringOption(o =>
+      o.setName('messageid').setDescription('Event message ID').setRequired(true)),
 
   new SlashCommandBuilder()
-    .setName('roster')
-    .setDescription('View upcoming shifts')
-    .addIntegerOption(option =>
-      option.setName('days')
-        .setDescription('Number of days to look ahead (default: 7)')
-        .setRequired(false)),
-
-  new SlashCommandBuilder()
-    .setName('shiftlogs')
-    .setDescription('View archived shift logs')
-    .addIntegerOption(option =>
-      option.setName('count')
-        .setDescription('Number of recent shifts to show (default: 5)')
-        .setRequired(false)),
-
-  new SlashCommandBuilder()
-    .setName('help')
-    .setDescription('View all available commands and their usage'),
+    .setName('editeventtime')
+    .setDescription('Edit event start time')
+    .addStringOption(o =>
+      o.setName('messageid')
+        .setDescription('Event message ID')
+        .setRequired(true))
+    .addStringOption(o =>
+      o.setName('datetime')
+        .setDescription('DD-MM-YYYY h:mm AM/PM')
+        .setRequired(true)),
 
   new SlashCommandBuilder()
     .setName('setstatus')
-    .setDescription('Set a custom bot status for a period of time')
-    .addStringOption(option =>
-      option.setName('type')
-        .setDescription('Activity type')
-        .setRequired(true)
-        .addChoices(
-          { name: 'Playing', value: 'playing' },
-          { name: 'Watching', value: 'watching' },
-          { name: 'Listening to', value: 'listening' },
-          { name: 'Competing in', value: 'competing' }
-        ))
-    .addStringOption(option =>
-      option.setName('message')
-        .setDescription('Status message')
+    .setDescription('Set custom bot status')
+    .addStringOption(o =>
+      o.setName('status')
+        .setDescription('Status text')
         .setRequired(true))
-    .addIntegerOption(option =>
-      option.setName('duration')
-        .setDescription('Duration in minutes (0 = permanent until changed)')
-        .setRequired(false))
+    .addStringOption(o =>
+      o.setName('type')
+        .setDescription('Activity type')
+        .addChoices(
+          { name: 'Playing', value: 'Playing' },
+          { name: 'Watching', value: 'Watching' },
+          { name: 'Listening', value: 'Listening' },
+          { name: 'Competing', value: 'Competing' }
+        )),
+
+  new SlashCommandBuilder()
+    .setName('statusclear')
+    .setDescription('Clear custom status and return to default'),
+
+  new SlashCommandBuilder()
+    .setName('addblackout')
+    .setDescription('Add a blackout date (no shifts)')
+    .addStringOption(o =>
+      o.setName('date')
+        .setDescription('Date (YYYY-MM-DD)')
+        .setRequired(true)),
+
+  new SlashCommandBuilder()
+    .setName('removeblackout')
+    .setDescription('Remove a blackout date')
+    .addStringOption(o =>
+      o.setName('date')
+        .setDescription('Date (YYYY-MM-DD)')
+        .setRequired(true)),
+
+  new SlashCommandBuilder()
+    .setName('listblackouts')
+    .setDescription('List all blackout dates')
 ];
 
 const rest = new REST({ version: '10' }).setToken(TOKEN);
+
 (async () => {
-  await rest.put(
-    Routes.applicationCommands(CLIENT_ID),
-    { body: commands.map(c => c.toJSON()) }
-  );
+  try {
+    await rest.put(Routes.applicationCommands(CLIENT_ID), {
+      body: commands.map(c => c.toJSON())
+    });
+    console.log('✅ Slash commands registered');
+  } catch (err) {
+    console.error('❌ Error registering commands:', err);
+  }
 })();
 
 /* ───────── INTERACTIONS ───────── */
-client.on('interactionCreate', async interaction => {
+client.on('interactionCreate', async i => {
+  // Check if it's a command interaction
+  if (!i.isChatInputCommand()) return;
 
-  /* CREATE EVENT */
-  if (interaction.isChatInputCommand() &&
-      interaction.commandName === 'createevent') {
+  try {
+    /* MY SIGNUPS */
+    if (i.commandName === 'mysignups') {
+      const userId = i.user.id;
+      const results = [];
 
-    if (!hasEventPermission(interaction.member))
-      return interaction.reply({ content: '❌ No permission.', ephemeral: true });
+      for (const ev of Object.values(events)) {
+        if (ev.cancelled || ev.datetime < Date.now()) continue;
+        for (const [role, users] of Object.entries(ev.signups)) {
+          if (users.includes(userId))
+            results.push(`• **${ev.title}** – ${role}\n  🕒 ${formatTime(ev.datetime)}`);
+        }
+      }
 
-    const nextShift = getNextShift();
-    if (!nextShift)
-      return interaction.reply({ content: '❌ No upcoming shift.', ephemeral: true });
-
-    const modal = new ModalBuilder()
-      .setCustomId('createevent-modal')
-      .setTitle('Create Event');
-
-    modal.addComponents(
-      new ActionRowBuilder().addComponents(
-        new TextInputBuilder()
-          .setCustomId('title')
-          .setLabel('Event Title')
-          .setStyle(TextInputStyle.Short)
-          .setRequired(true)
-          .setValue(getAutoTitle(nextShift))
-      ),
-      new ActionRowBuilder().addComponents(
-        new TextInputBuilder()
-          .setCustomId('datetime')
-          .setLabel('Date & Time (YYYY-MM-DD HH:mm)')
-          .setStyle(TextInputStyle.Short)
-          .setRequired(true)
-          .setValue(nextShift.toFormat('yyyy-MM-dd HH:mm'))
-      )
-    );
-
-    return interaction.showModal(modal);
-  }
-
-  /* MODAL SUBMIT */
-  if (interaction.isModalSubmit() &&
-      interaction.customId === 'createevent-modal') {
-
-    await interaction.deferReply({ ephemeral: true });
-
-    const title = interaction.fields.getTextInputValue('title');
-    const dtStr = interaction.fields.getTextInputValue('datetime');
-    const dt = DateTime.fromFormat(dtStr, 'yyyy-MM-dd HH:mm', { zone: TIMEZONE });
-
-    if (!dt.isValid)
-      return interaction.editReply('❌ Invalid date.');
-
-    const unix = Math.floor(dt.toSeconds());
-
-    const embed = new EmbedBuilder()
-      .setColor(0x00b0f4)
-      .setTitle(title)
-      .setDescription(
-        `🕒 **When:** ${formatEST(dt.toMillis())} (EST)\n` +
-        `⏳ **Starts:** <t:${unix}:R>\n\n` +
-        buildSignupList({})
-      )
-      .setTimestamp();
-
-    const channel = await client.channels.fetch(SIGNUP_CHANNEL);
-    const msg = await channel.send({ embeds: [embed] });
-
-    events[msg.id] = {
-      title,
-      datetime: dt.toMillis(),
-      channelId: channel.id,
-      signups: {},
-      cancelled: false
-    };
-
-    saveEvents();
-    scheduleReminder(msg.id);
-    scheduleBackupAlert(msg.id);
-
-    for (const emoji of Object.keys(roleConfig)) {
-      await msg.react(emoji);
-    }
-
-    return interaction.editReply(`✅ Event **${title}** created.`);
-  }
-
-  /* NEXT SHIFT */
-  if (interaction.isChatInputCommand() &&
-      interaction.commandName === 'nextshift') {
-
-    const nextShift = getNextShift();
-    if (!nextShift)
-      return interaction.reply({ content: '❌ No upcoming shifts found.', ephemeral: true });
-
-    const unix = Math.floor(nextShift.toSeconds());
-
-    return interaction.reply({
-      content:
-        `🕒 **Next Shift:** <t:${unix}:F>\n` +
-        `⏳ **Countdown:** <t:${unix}:R>\n` +
-        `🚪 **We are:** ${isTodayOpen() ? 'OPEN' : 'NOT OPEN'}`,
-      ephemeral: true
-    });
-  }
-
-  /* SHIFT STATS */
-  if (interaction.isChatInputCommand() &&
-      interaction.commandName === 'shiftstats') {
-
-    const period = interaction.options.getString('period') || '30';
-    let cutoff = 0;
-
-    if (period !== 'all') {
-      const days = parseInt(period);
-      cutoff = Date.now() - (days * 24 * 60 * 60 * 1000);
-    }
-
-    const recentLogs = shiftLogs.filter(log => log.timestamp >= cutoff);
-
-    if (recentLogs.length === 0) {
-      return interaction.reply({ content: '📊 No shift data available for this period.', ephemeral: true });
-    }
-
-    // Count signups per user
-    const userStats = {};
-    const roleStats = {};
-
-    recentLogs.forEach(log => {
-      Object.entries(log.signups).forEach(([role, users]) => {
-        roleStats[role] = (roleStats[role] || 0) + users.length;
-        users.forEach(userId => {
-          userStats[userId] = (userStats[userId] || 0) + 1;
-        });
+      return await i.reply({
+        content: results.length
+          ? `📋 **Your Signups:**\n\n${results.join('\n')}`
+          : '🔭 You are not signed up for any upcoming shifts.',
+        ephemeral: true
       });
-    });
-
-    const topUsers = Object.entries(userStats)
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 10)
-      .map(([id, count]) => `<@${id}>: **${count}** shifts`)
-      .join('\n');
-
-    const roleBreakdown = Object.entries(roleStats)
-      .sort((a, b) => b[1] - a[1])
-      .map(([role, count]) => `**${role}:** ${count} signups`)
-      .join('\n');
-
-    const embed = new EmbedBuilder()
-      .setColor(0x00b0f4)
-      .setTitle('📊 Shift Statistics')
-      .addFields(
-        { name: '📅 Period', value: period === 'all' ? 'All time' : `Last ${period} days`, inline: true },
-        { name: '🎯 Total Shifts', value: `${recentLogs.length}`, inline: true },
-        { name: '\u200b', value: '\u200b', inline: true },
-        { name: '👑 Top Contributors', value: topUsers || 'None', inline: false },
-        { name: '🎭 Role Breakdown', value: roleBreakdown || 'None', inline: false }
-      )
-      .setTimestamp();
-
-    return interaction.reply({ embeds: [embed], ephemeral: true });
-  }
-
-  /* BLACKOUT */
-  if (interaction.isChatInputCommand() &&
-      interaction.commandName === 'blackout') {
-
-    if (!hasEventPermission(interaction.member))
-      return interaction.reply({ content: '❌ No permission.', ephemeral: true });
-
-    const subcommand = interaction.options.getSubcommand();
-
-    if (subcommand === 'add') {
-      const dateStr = interaction.options.getString('date');
-      const dt = DateTime.fromFormat(dateStr, 'yyyy-MM-dd', { zone: TIMEZONE });
-
-      if (!dt.isValid)
-        return interaction.reply({ content: '❌ Invalid date format. Use YYYY-MM-DD', ephemeral: true });
-
-      const dateKey = dt.toFormat('yyyy-MM-dd');
-
-      if (blackoutDates.includes(dateKey))
-        return interaction.reply({ content: '⚠️ Date already blacked out.', ephemeral: true });
-
-      blackoutDates.push(dateKey);
-      saveBlackoutDates();
-
-      return interaction.reply({ content: `✅ Blackout added for **${dateKey}**`, ephemeral: true });
     }
 
-    if (subcommand === 'remove') {
-      const dateStr = interaction.options.getString('date');
-      const dateKey = DateTime.fromFormat(dateStr, 'yyyy-MM-dd', { zone: TIMEZONE }).toFormat('yyyy-MM-dd');
+    /* NEXT SHIFT */
+    if (i.commandName === 'nextshift') {
+      // Find the next open day at 9 PM EST
+      const now = DateTime.now().setZone(TIMEZONE);
+      let nextOpenDate = null;
+      
+      // Check up to 14 days ahead to find the next open day
+      for (let i = 0; i < 14; i++) {
+        const checkDate = now.plus({ days: i });
+        const dayName = checkDate.toFormat('EEEE');
+        
+        // Set to 9 PM (21:00) for this day
+        const shiftTime = checkDate.set({ hour: 21, minute: 0, second: 0, millisecond: 0 });
+        
+        // Check if this day is an open day and the time hasn't passed yet
+        if (config.openDays.includes(dayName) && shiftTime > now) {
+          nextOpenDate = shiftTime;
+          break;
+        }
+      }
 
-      const index = blackoutDates.indexOf(dateKey);
-      if (index === -1)
-        return interaction.reply({ content: '⚠️ Date not found in blackout list.', ephemeral: true });
+      if (!nextOpenDate) {
+        return await i.reply({
+          content: '📅 No upcoming open days found in the next 2 weeks.',
+          ephemeral: true
+        });
+      }
 
-      blackoutDates.splice(index, 1);
-      saveBlackoutDates();
+      const unixTimestamp = Math.floor(nextOpenDate.toMillis() / 1000);
+      const dayName = nextOpenDate.toFormat('EEEE');
 
-      return interaction.reply({ content: `✅ Blackout removed for **${dateKey}**`, ephemeral: true });
+      const embed = new EmbedBuilder()
+        .setColor(0x00b0f4)
+        .setTitle('📅 Next Open Day')
+        .addFields(
+          { name: 'Day', value: `${dayName} Night`, inline: false },
+          { name: 'Shift Starts', value: `<t:${unixTimestamp}:F>`, inline: false },
+          { name: 'Countdown', value: `<t:${unixTimestamp}:R>`, inline: false }
+        )
+        .setFooter({ text: 'All times shown in your local timezone' });
+
+      return await i.reply({ embeds: [embed], ephemeral: true });
     }
 
-    if (subcommand === 'list') {
-      if (blackoutDates.length === 0)
-        return interaction.reply({ content: '📅 No blackout dates set.', ephemeral: true });
+    /* ARE WE OPEN */
+    if (i.commandName === 'areweopen') {
+      const now = DateTime.now().setZone(TIMEZONE);
+      const today = now.toFormat('EEEE');
+      const todayAt9PM = now.set({ hour: 21, minute: 0, second: 0, millisecond: 0 });
 
-      const sorted = blackoutDates.sort();
-      const list = sorted.map(d => `• ${d}`).join('\n');
+      // Check if today is an open day
+      if (config.openDays.includes(today)) {
+        const unixTimestamp = Math.floor(todayAt9PM.toMillis() / 1000);
+        
+        // Check if 9 PM has already passed today
+        if (now > todayAt9PM) {
+          // 9 PM has passed, show next open day instead
+          let nextOpenDate = null;
+          
+          for (let i = 1; i < 14; i++) {
+            const checkDate = now.plus({ days: i });
+            const dayName = checkDate.toFormat('EEEE');
+            const shiftTime = checkDate.set({ hour: 21, minute: 0, second: 0, millisecond: 0 });
+            
+            if (config.openDays.includes(dayName)) {
+              nextOpenDate = shiftTime;
+              break;
+            }
+          }
 
-      return interaction.reply({ content: `🚫 **Blackout Dates:**\n${list}`, ephemeral: true });
-    }
-  }
+          if (nextOpenDate) {
+            const nextUnixTimestamp = Math.floor(nextOpenDate.toMillis() / 1000);
+            const nextDayName = nextOpenDate.toFormat('EEEE');
+            
+            return await i.reply({
+              content: `🍸 **Yes, we were open today!**\n\nBut it's past 9 PM now.\n\n**We open next on ${nextDayName}**\n<t:${nextUnixTimestamp}:F>\n<t:${nextUnixTimestamp}:R>`,
+              ephemeral: true
+            });
+          }
+        }
+        
+        return await i.reply({
+          content: `🍸 **Yes, we are open today!**\n\n**Shift starts at:**\n<t:${unixTimestamp}:F>\n<t:${unixTimestamp}:R>`,
+          ephemeral: true
+        });
+      } else {
+        // Today is not an open day, find next open day
+        let nextOpenDate = null;
+        
+        for (let i = 1; i < 14; i++) {
+          const checkDate = now.plus({ days: i });
+          const dayName = checkDate.toFormat('EEEE');
+          const shiftTime = checkDate.set({ hour: 21, minute: 0, second: 0, millisecond: 0 });
+          
+          if (config.openDays.includes(dayName)) {
+            nextOpenDate = shiftTime;
+            break;
+          }
+        }
 
-  /* ROSTER */
-  if (interaction.isChatInputCommand() &&
-      interaction.commandName === 'roster') {
+        if (!nextOpenDate) {
+          return await i.reply({
+            content: '❌ **No, we are not open today.**\n\nNo upcoming open days found in the next 2 weeks.',
+            ephemeral: true
+          });
+        }
 
-    const days = interaction.options.getInteger('days') || 7;
-    const now = DateTime.now().setZone(TIMEZONE);
-    const upcomingShifts = [];
+        const unixTimestamp = Math.floor(nextOpenDate.toMillis() / 1000);
+        const nextDayName = nextOpenDate.toFormat('EEEE');
 
-    for (let i = 0; i < days; i++) {
-      const day = now.plus({ days: i });
-      const dateKey = day.toFormat('yyyy-MM-dd');
-      const dayName = day.toFormat('cccc');
-
-      if (config.openDays.includes(dayName) && !blackoutDates.includes(dateKey)) {
-        const shiftTime = day.set({ hour: 21, minute: 0, second: 0, millisecond: 0 });
-        const unix = Math.floor(shiftTime.toSeconds());
-        upcomingShifts.push(`• **${dayName}** ${dateKey} - <t:${unix}:R>`);
+        return await i.reply({
+          content: `❌ **No, we are not open today.**\n\n**We open next on ${nextDayName}**\n<t:${unixTimestamp}:F>\n<t:${unixTimestamp}:R>`,
+          ephemeral: true
+        });
       }
     }
 
-    if (upcomingShifts.length === 0) {
-      return interaction.reply({ content: `📅 No shifts scheduled in the next ${days} days.`, ephemeral: true });
+    /* CANCEL EVENT */
+    if (i.commandName === 'cancelevent') {
+      if (!hasEventPermission(i.member))
+        return await i.reply({ content: '❌ No permission.', ephemeral: true });
+
+      const id = i.options.getString('messageid');
+      const ev = events[id];
+      
+      if (!ev || ev.cancelled)
+        return await i.reply({ content: '⚠️ Event not found.', ephemeral: true });
+
+      ev.cancelled = true;
+      save(DATA_FILE, events);
+      clearTimeout(reminderTimers[id]);
+      clearTimeout(backupAlertTimers[id]);
+
+      try {
+        const ch = await client.channels.fetch(ev.channelId);
+        const msg = await ch.messages.fetch(id);
+        await msg.edit({
+          embeds: [
+            new EmbedBuilder()
+              .setColor(0xff0000)
+              .setTitle(`❌ CANCELLED – ${ev.title}`)
+              .setDescription('This shift has been cancelled.')
+          ]
+        });
+      } catch (err) {
+        console.error('⚠️ Error updating cancelled event message:', err.message);
+      }
+
+      return await i.reply({ content: '✅ Event cancelled.', ephemeral: true });
     }
 
-    const embed = new EmbedBuilder()
-      .setColor(0x00b0f4)
-      .setTitle('📅 Upcoming Shifts')
-      .setDescription(upcomingShifts.join('\n'))
-      .setFooter({ text: `Next ${days} days` })
-      .setTimestamp();
+    /* EDIT EVENT TIME */
+    if (i.commandName === 'editeventtime') {
+      if (!hasEventPermission(i.member))
+        return await i.reply({ content: '❌ No permission.', ephemeral: true });
 
-    return interaction.reply({ embeds: [embed], ephemeral: true });
-  }
+      const id = i.options.getString('messageid');
+      const dtStr = i.options.getString('datetime');
+      const ev = events[id];
 
-  /* SHIFT LOGS */
-  if (interaction.isChatInputCommand() &&
-      interaction.commandName === 'shiftlogs') {
+      if (!ev || ev.cancelled)
+        return await i.reply({ content: '⚠️ Event not found.', ephemeral: true });
 
-    if (!hasEventPermission(interaction.member))
-      return interaction.reply({ content: '❌ No permission.', ephemeral: true });
+      const dt = DateTime.fromFormat(dtStr, 'dd-MM-yyyy h:mm a', { zone: TIMEZONE });
+      if (!dt.isValid)
+        return await i.reply({ content: '❌ Invalid date format. Use DD-MM-YYYY h:mm AM/PM', ephemeral: true });
 
-    const count = interaction.options.getInteger('count') || 5;
-    const recentLogs = shiftLogs.slice(-count).reverse();
+      ev.datetime = dt.toMillis();
+      save(DATA_FILE, events);
 
-    if (recentLogs.length === 0) {
-      return interaction.reply({ content: '📋 No shift logs available.', ephemeral: true });
+      clearTimeout(reminderTimers[id]);
+      clearTimeout(backupAlertTimers[id]);
+      scheduleReminder(id);
+      scheduleBackupAlert(id);
+
+      try {
+        const ch = await client.channels.fetch(ev.channelId);
+        const msg = await ch.messages.fetch(id);
+
+        await msg.edit({
+          embeds: [
+            new EmbedBuilder()
+              .setColor(0x00b0f4)
+              .setTitle(ev.title)
+              .setDescription(
+                `🕒 **When:** ${formatTime(ev.datetime)}\n\n${buildSignupList(ev.signups)}`
+              )
+          ]
+        });
+      } catch (err) {
+        console.error('⚠️ Error updating event message:', err.message);
+      }
+
+      return await i.reply({ content: '✅ Event time updated.', ephemeral: true });
     }
 
-    const logText = recentLogs.map(log => {
-      const date = DateTime.fromMillis(log.datetime).toFormat('yyyy-MM-dd');
-      const totalSignups = Object.values(log.signups).flat().length;
-      return `**${log.title}** (${date}) - ${totalSignups} signups`;
-    }).join('\n');
+    /* SET STATUS */
+    if (i.commandName === 'setstatus') {
+      if (!hasEventPermission(i.member))
+        return await i.reply({ content: '❌ No permission.', ephemeral: true });
 
-    const embed = new EmbedBuilder()
-      .setColor(0x00b0f4)
-      .setTitle('📋 Recent Shift Logs')
-      .setDescription(logText)
-      .setTimestamp();
+      const status = i.options.getString('status');
+      const type = i.options.getString('type') || 'Playing';
 
-    return interaction.reply({ embeds: [embed], ephemeral: true });
-  }
+      customStatus = { status, type };
 
-  /* HELP */
-  if (interaction.isChatInputCommand() &&
-      interaction.commandName === 'help') {
+      client.user.setPresence({
+        activities: [{
+          name: status,
+          type: ActivityType[type]
+        }],
+        status: 'online'
+      });
 
-    const isManager = hasEventPermission(interaction.member);
+      return await i.reply({ content: `✅ Status set to: ${type} ${status}`, ephemeral: true });
+    }
 
-    const generalCommands = [
-      '`/nextshift` - Shows when the next shift is scheduled with countdown',
-      '`/roster` - View all upcoming shifts for the next 7 days (or custom period)',
-      '`/shiftstats` - View signup statistics and top contributors over time'
-    ];
+    /* CLEAR STATUS */
+    if (i.commandName === 'statusclear') {
+      if (!hasEventPermission(i.member))
+        return await i.reply({ content: '❌ No permission.', ephemeral: true });
 
-    const managerCommands = [
-      '`/createevent` - Manually create a new shift signup event',
-      '`/blackout add/remove/list` - Manage dates when the bar is closed',
-      '`/shiftlogs` - View archived records of past shifts and who worked',
-      '`/setstatus` - Set a custom bot status message for a period of time'
-    ];
+      customStatus = null;
+      setDefaultStatus();
 
-    const featuresText = [
-      '**🤖 Auto Features:**',
-      '• Signup sheets auto-post at 5 PM GMT on open days',
-      '• Shift reminders sent when shifts start',
-      '• Backup alerts 2 hours before if roles are empty',
-      '• All shifts automatically archived for records'
-    ].join('\n');
+      return await i.reply({ content: '✅ Status cleared, reverted to default.', ephemeral: true });
+    }
 
-    const signupText = [
-      '**📝 How to Sign Up:**',
-      '1️⃣ Active Manager',
-      '2️⃣ Backup Manager', 
-      '3️⃣ Bouncer',
-      '4️⃣ Bartender',
-      '5️⃣ Dancer',
-      '6️⃣ DJ',
-      '',
-      'React with the emoji for your role!'
-    ].join('\n');
+    /* ADD BLACKOUT */
+    if (i.commandName === 'addblackout') {
+      if (!hasEventPermission(i.member))
+        return await i.reply({ content: '❌ No permission.', ephemeral: true });
 
-    const embed = new EmbedBuilder()
-      .setColor(0x00b0f4)
-      .setTitle('📚 Retro Replay Bot - Help')
-      .setDescription('Your bar management assistant')
-      .addFields(
-        { name: '👥 General Commands', value: generalCommands.join('\n'), inline: false },
-        { name: '⚙️ Manager Commands', value: isManager ? managerCommands.join('\n') : '*Manager access required*', inline: false },
-        { name: '\u200b', value: featuresText, inline: false },
-        { name: '\u200b', value: signupText, inline: false }
-      )
-      .setFooter({ text: 'Retro Replay Bot v30.0' })
-      .setTimestamp();
+      const dateStr = i.options.getString('date');
+      const dt = DateTime.fromISO(dateStr, { zone: TIMEZONE });
 
-    return interaction.reply({ embeds: [embed], ephemeral: true });
-  }
+      if (!dt.isValid)
+        return await i.reply({ content: '❌ Invalid date format. Use YYYY-MM-DD', ephemeral: true });
 
-  /* SET STATUS */
-  if (interaction.isChatInputCommand() &&
-      interaction.commandName === 'setstatus') {
+      if (blackoutDates.includes(dateStr))
+        return await i.reply({ content: '⚠️ Date already in blackout list.', ephemeral: true });
 
-    if (!hasEventPermission(interaction.member))
-      return interaction.reply({ content: '❌ No permission.', ephemeral: true });
+      blackoutDates.push(dateStr);
+      save(BLACKOUT_FILE, blackoutDates);
 
-    const type = interaction.options.getString('type');
-    const message = interaction.options.getString('message');
-    const duration = interaction.options.getInteger('duration') || 0;
+      return await i.reply({ content: `✅ Added blackout date: ${dateStr}`, ephemeral: true });
+    }
 
-    setCustomStatus(type, message, duration);
+    /* REMOVE BLACKOUT */
+    if (i.commandName === 'removeblackout') {
+      if (!hasEventPermission(i.member))
+        return await i.reply({ content: '❌ No permission.', ephemeral: true });
 
-    const typeLabel = {
-      'playing': 'Playing',
-      'watching': 'Watching',
-      'listening': 'Listening to',
-      'competing': 'Competing in'
-    };
+      const dateStr = i.options.getString('date');
+      const idx = blackoutDates.indexOf(dateStr);
 
-    const durationText = duration > 0 
-      ? `for **${duration} minutes**` 
-      : 'until manually changed';
+      if (idx === -1)
+        return await i.reply({ content: '⚠️ Date not found in blackout list.', ephemeral: true });
 
-    return interaction.reply({ 
-      content: `✅ Status set to "${typeLabel[type]} ${message}" ${durationText}`, 
-      ephemeral: true 
-    });
+      blackoutDates.splice(idx, 1);
+      save(BLACKOUT_FILE, blackoutDates);
+
+      return await i.reply({ content: `✅ Removed blackout date: ${dateStr}`, ephemeral: true });
+    }
+
+    /* LIST BLACKOUTS */
+    if (i.commandName === 'listblackouts') {
+      if (!blackoutDates.length)
+        return await i.reply({ content: '📅 No blackout dates set.', ephemeral: true });
+
+      const sorted = blackoutDates.sort();
+      return await i.reply({
+        content: `📅 **Blackout Dates:**\n${sorted.map(d => `• ${d}`).join('\n')}`,
+        ephemeral: true
+      });
+    }
+
+  } catch (err) {
+    console.error(`❌ Error handling command ${i.commandName}:`, err);
+    
+    // Try to respond with error if not already replied
+    try {
+      const errorMsg = { content: '❌ An error occurred processing your command.', ephemeral: true };
+      if (i.replied || i.deferred) {
+        await i.followUp(errorMsg);
+      } else {
+        await i.reply(errorMsg);
+      }
+    } catch (replyErr) {
+      console.error('❌ Could not send error message:', replyErr.message);
+    }
   }
 });
 
-/* ───────── EMOJI SIGNUPS ───────── */
-async function updateEventEmbed(message) {
-  const ev = events[message.id];
-  if (!ev) return;
-
-  const unix = Math.floor(ev.datetime / 1000);
-
-  const embed = new EmbedBuilder()
-    .setColor(0x00b0f4)
-    .setTitle(ev.title)
-    .setDescription(
-      `🕒 **When:** ${formatEST(ev.datetime)} (EST)\n` +
-      `⏳ **Starts:** <t:${unix}:R>\n\n` +
-      buildSignupList(ev.signups)
-    )
-    .setTimestamp();
-
-  await message.edit({ embeds: [embed] });
-}
-
+/* ───────── REACTION HANDLER ───────── */
 client.on('messageReactionAdd', async (reaction, user) => {
   if (user.bot) return;
-  if (reaction.partial) await reaction.fetch();
-  if (reaction.message.partial) await reaction.message.fetch();
 
-  const ev = events[reaction.message.id];
-  const role = roleConfig[reaction.emoji.name];
-  if (!ev || !role || ev.cancelled) return;
+  try {
+    if (reaction.partial) {
+      await reaction.fetch();
+    }
+  } catch (err) {
+    console.error('⚠️ Error fetching reaction:', err.message);
+    return;
+  }
 
-  ev.signups[role] ??= [];
+  const messageId = reaction.message.id;
+  const ev = events[messageId];
+  
+  if (!ev || ev.cancelled) return;
+
+  const emoji = reaction.emoji.name;
+  const role = roleConfig[emoji];
+
+  if (!role) return;
+
+  if (disabledRoles.includes(role)) {
+    try {
+      await reaction.users.remove(user.id);
+      await user.send(`⚠️ Sorry, the **${role}** role is currently disabled for signups.`);
+    } catch (err) {
+      console.error('⚠️ Error handling disabled role reaction:', err.message);
+    }
+    return;
+  }
+
+  // Find which role (if any) the user was previously signed up for
+  let previousEmoji = null;
+  for (const [r, users] of Object.entries(ev.signups)) {
+    const idx = users.indexOf(user.id);
+    if (idx > -1) {
+      users.splice(idx, 1);
+      // Find the emoji for this role
+      previousEmoji = Object.keys(roleConfig).find(e => roleConfig[e] === r);
+    }
+  }
+
+  // Remove the user's previous reaction if they had one
+  if (previousEmoji && previousEmoji !== emoji) {
+    try {
+      const previousReaction = reaction.message.reactions.cache.get(previousEmoji);
+      if (previousReaction) {
+        await previousReaction.users.remove(user.id);
+      }
+    } catch (err) {
+      console.error('⚠️ Error removing previous reaction:', err.message);
+    }
+  }
+
+  // Add user to the selected role
+  if (!ev.signups[role]) ev.signups[role] = [];
   if (!ev.signups[role].includes(user.id)) {
     ev.signups[role].push(user.id);
-    saveEvents();
-    await updateEventEmbed(reaction.message);
+  }
+
+  save(DATA_FILE, events);
+
+  // Update the message embed
+  try {
+    const embed = new EmbedBuilder()
+      .setColor(0x00b0f4)
+      .setTitle(ev.title)
+      .setDescription(
+        `🕒 **When:** ${formatTime(ev.datetime)}\n\n${buildSignupList(ev.signups)}`
+      )
+      .setFooter({ text: 'React to sign up!' });
+
+    await reaction.message.edit({ embeds: [embed] });
+  } catch (err) {
+    console.error('⚠️ Error updating embed on reaction add:', err.message);
   }
 });
 
 client.on('messageReactionRemove', async (reaction, user) => {
   if (user.bot) return;
-  if (reaction.partial) await reaction.fetch();
-  if (reaction.message.partial) await reaction.message.fetch();
 
-  const ev = events[reaction.message.id];
-  const role = roleConfig[reaction.emoji.name];
-  if (!ev || !role) return;
+  try {
+    if (reaction.partial) {
+      await reaction.fetch();
+    }
+  } catch (err) {
+    console.error('⚠️ Error fetching reaction:', err.message);
+    return;
+  }
 
-  ev.signups[role] =
-    (ev.signups[role] || []).filter(id => id !== user.id);
+  const messageId = reaction.message.id;
+  const ev = events[messageId];
+  
+  if (!ev || ev.cancelled) return;
 
-  saveEvents();
-  await updateEventEmbed(reaction.message);
+  const emoji = reaction.emoji.name;
+  const role = roleConfig[emoji];
+
+  if (!role) return;
+
+  const users = ev.signups[role] || [];
+  const idx = users.indexOf(user.id);
+  if (idx > -1) {
+    users.splice(idx, 1);
+  }
+
+  save(DATA_FILE, events);
+
+  try {
+    const embed = new EmbedBuilder()
+      .setColor(0x00b0f4)
+      .setTitle(ev.title)
+      .setDescription(
+        `🕒 **When:** ${formatTime(ev.datetime)}\n\n${buildSignupList(ev.signups)}`
+      )
+      .setFooter({ text: 'React to sign up!' });
+
+    await reaction.message.edit({ embeds: [embed] });
+  } catch (err) {
+    console.error('⚠️ Error updating embed on reaction remove:', err.message);
+  }
 });
 
 /* ───────── READY ───────── */
-client.once('ready', () => {
+client.once('ready', async () => {
   console.log(`✅ Logged in as ${client.user.tag}`);
   
-  // Set initial status and start rotation
-  rotateStatus();
-  setInterval(rotateStatus, 30000);
+  // Verify signup channel access
+  if (SIGNUP_CHANNEL) {
+    try {
+      const channel = await client.channels.fetch(SIGNUP_CHANNEL);
+      if (channel) {
+        const perms = channel.permissionsFor(client.user);
+        if (perms.has(['ViewChannel', 'SendMessages', 'AddReactions'])) {
+          console.log('✅ Signup channel access verified');
+        } else {
+          console.error('⚠️ Bot has access to channel but missing permissions');
+          console.error('   Required: View Channel, Send Messages, Add Reactions');
+        }
+      }
+    } catch (err) {
+      console.error('⚠️ Cannot access signup channel - check bot permissions');
+      console.error('   Channel ID:', SIGNUP_CHANNEL);
+      console.error('   Make sure the bot has access to this channel');
+    }
+  } else {
+    console.error('⚠️ SIGNUP_CHANNEL_ID not set in .env');
+  }
   
-  // Check for auto-posting every minute
-  setInterval(checkAndAutoPost, 60000);
-  checkAndAutoPost();
+  setDefaultStatus();
   
-  // Restore timers
-  Object.keys(events).forEach(eventId => {
-    scheduleReminder(eventId);
-    scheduleBackupAlert(eventId);
+  Object.keys(events).forEach(id => {
+    scheduleReminder(id);
+    scheduleBackupAlert(id);
   });
-});
 
-/* ───────── LOGIN ───────── */
-if (!TOKEN || !CLIENT_ID) {
-  console.error('❌ Missing BOT_TOKEN or CLIENT_ID');
-  process.exit(1);
-}
+  scheduleAutoPost();
+  
+  // Run auto-post check on startup after a delay
+  setTimeout(autoPostWeeklyShifts, 5000);
+});
 
 client.login(TOKEN);
