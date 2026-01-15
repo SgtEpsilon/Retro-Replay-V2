@@ -1,5 +1,5 @@
 /***********************
- * Retro Replay Bot Rewrite V2.2.0
+ * Retro Replay Bot Rewrite V2.2.2
  * Discord.js v14
  ***********************/
 
@@ -43,8 +43,8 @@ const BLACKOUT_FILE = path.join(__dirname, 'blackout_dates.json');
 const SHIFT_LOG_FILE = path.join(__dirname, 'shift_logs.json');
 const DISABLED_ROLES_FILE = path.join(__dirname, 'disabled_roles.json');
 
-const SIGNUP_CHANNEL = config.signupChannelId;
-const BAR_STAFF_ROLE_ID = config.barStaffRoleId;
+const SIGNUP_CHANNEL = process.env.SIGNUP_CHANNEL_ID;
+const BAR_STAFF_ROLE_ID = process.env.BAR_STAFF_ROLE_ID;
 
 /* ───────── CLIENT ───────── */
 const client = new Client({
@@ -65,6 +65,7 @@ let autoPosted = {};
 let blackoutDates = [];
 let shiftLogs = [];
 let disabledRoles = [];
+let customStatus = null; // For /setstatus command
 
 function load(file, fallback) {
   try {
@@ -96,6 +97,26 @@ function formatTime(ms) {
     .toFormat('dd-MM-yyyy h:mm a');
 }
 
+function isBlackoutDate(date) {
+  const checkDate = DateTime.fromMillis(date).setZone(TIMEZONE).toISODate();
+  return blackoutDates.some(bd => {
+    const blackout = DateTime.fromISO(bd, { zone: TIMEZONE }).toISODate();
+    return blackout === checkDate;
+  });
+}
+
+function setDefaultStatus() {
+  if (customStatus) return; // Don't override custom status
+  
+  client.user.setPresence({
+    activities: [{
+      name: '🍸 Shifts at the Retro Bar',
+      type: ActivityType.Watching
+    }],
+    status: 'online'
+  });
+}
+
 const roleConfig = {
   '1️⃣': 'Active Manager',
   '2️⃣': 'Backup Manager',
@@ -117,6 +138,101 @@ function buildSignupList(signups) {
         : '*No signups yet*'
     }`;
   }).join('\n\n');
+}
+
+/* ───────── AUTO POST LOGIC ───────── */
+async function autoPostWeeklyShifts() {
+  try {
+    const channel = await client.channels.fetch(SIGNUP_CHANNEL);
+    if (!channel) return;
+
+    const now = DateTime.now().setZone(AUTO_POST_TIMEZONE);
+    const today = now.toFormat('EEEE'); // Day name (e.g., "Tuesday")
+    const dateKey = now.toISODate(); // YYYY-MM-DD
+
+    // Check if today is an open day
+    if (!config.openDays.includes(today)) {
+      console.log(`⏭️ Today (${today}) is not an open day, skipping auto-post.`);
+      return;
+    }
+
+    // Check if already posted today
+    if (autoPosted[dateKey]) {
+      console.log(`✅ Already auto-posted for ${dateKey}`);
+      return;
+    }
+
+    // Check if today is a blackout date
+    if (isBlackoutDate(now.toMillis())) {
+      console.log(`🚫 Today (${dateKey}) is a blackout date, skipping auto-post.`);
+      return;
+    }
+
+    // Create shift for today
+    const shiftTime = now.set({ 
+      hour: SHIFT_START_HOUR, 
+      minute: 0, 
+      second: 0 
+    }).setZone(TIMEZONE);
+
+    const title = `🍸 ${today} Night Shift`;
+    const signups = Object.fromEntries(
+      Object.values(roleConfig).map(role => [role, []])
+    );
+
+    const embed = new EmbedBuilder()
+      .setColor(0x00b0f4)
+      .setTitle(title)
+      .setDescription(
+        `🕒 **When:** ${formatTime(shiftTime.toMillis())}\n\n${buildSignupList(signups)}`
+      )
+      .setFooter({ text: 'React to sign up!' });
+
+    const msg = await channel.send({ 
+      content: `<@&${BAR_STAFF_ROLE_ID}> New shift posted!`,
+      embeds: [embed] 
+    });
+
+    // Add reaction emojis
+    for (const emoji of Object.keys(roleConfig)) {
+      await msg.react(emoji);
+    }
+
+    // Save event
+    events[msg.id] = {
+      id: msg.id,
+      title,
+      datetime: shiftTime.toMillis(),
+      channelId: channel.id,
+      signups,
+      cancelled: false
+    };
+
+    scheduleReminder(msg.id);
+    scheduleBackupAlert(msg.id);
+
+    save(DATA_FILE, events);
+    
+    // Mark today as posted
+    autoPosted[dateKey] = Date.now();
+    save(AUTO_POST_FILE, autoPosted);
+
+    console.log(`✅ Auto-posted shift for ${today}, ${dateKey}`);
+  } catch (err) {
+    console.error('❌ Auto-post error:', err);
+  }
+}
+
+function scheduleAutoPost() {
+  // Check every 10 minutes if it's time to post
+  setInterval(async () => {
+    const now = DateTime.now().setZone(AUTO_POST_TIMEZONE);
+    
+    // Only post during the configured hour
+    if (now.hour === AUTO_POST_HOUR && now.minute < 10) {
+      await autoPostWeeklyShifts();
+    }
+  }, 10 * 60 * 1000); // Check every 10 minutes
 }
 
 /* ───────── SCHEDULING ───────── */
@@ -162,7 +278,9 @@ function scheduleBackupAlert(id) {
 
 /* ───────── SLASH COMMANDS ───────── */
 const commands = [
-  new SlashCommandBuilder().setName('mysignups').setDescription('View your upcoming signups'),
+  new SlashCommandBuilder()
+    .setName('mysignups')
+    .setDescription('View your upcoming signups'),
 
   new SlashCommandBuilder()
     .setName('cancelevent')
@@ -178,7 +296,48 @@ const commands = [
     .addStringOption(o =>
       o.setName('datetime')
         .setDescription('DD-MM-YYYY h:mm AM/PM')
+        .setRequired(true)),
+
+  new SlashCommandBuilder()
+    .setName('setstatus')
+    .setDescription('Set custom bot status')
+    .addStringOption(o =>
+      o.setName('status')
+        .setDescription('Status text')
         .setRequired(true))
+    .addStringOption(o =>
+      o.setName('type')
+        .setDescription('Activity type')
+        .addChoices(
+          { name: 'Playing', value: 'Playing' },
+          { name: 'Watching', value: 'Watching' },
+          { name: 'Listening', value: 'Listening' },
+          { name: 'Competing', value: 'Competing' }
+        )),
+
+  new SlashCommandBuilder()
+    .setName('statusclear')
+    .setDescription('Clear custom status and return to default'),
+
+  new SlashCommandBuilder()
+    .setName('addblackout')
+    .setDescription('Add a blackout date (no shifts)')
+    .addStringOption(o =>
+      o.setName('date')
+        .setDescription('Date (YYYY-MM-DD)')
+        .setRequired(true)),
+
+  new SlashCommandBuilder()
+    .setName('removeblackout')
+    .setDescription('Remove a blackout date')
+    .addStringOption(o =>
+      o.setName('date')
+        .setDescription('Date (YYYY-MM-DD)')
+        .setRequired(true)),
+
+  new SlashCommandBuilder()
+    .setName('listblackouts')
+    .setDescription('List all blackout dates')
 ];
 
 const rest = new REST({ version: '10' }).setToken(TOKEN);
@@ -198,14 +357,14 @@ client.on('interactionCreate', async i => {
       if (ev.cancelled || ev.datetime < Date.now()) continue;
       for (const [role, users] of Object.entries(ev.signups)) {
         if (users.includes(userId))
-          results.push(`• **${ev.title}** — ${role}\n  🕒 ${formatTime(ev.datetime)}`);
+          results.push(`• **${ev.title}** – ${role}\n  🕒 ${formatTime(ev.datetime)}`);
       }
     }
 
     return i.reply({
       content: results.length
-        ? `📝 **Your Signups:**\n\n${results.join('\n')}`
-        : '📭 You are not signed up for any upcoming shifts.',
+        ? `📋 **Your Signups:**\n\n${results.join('\n')}`
+        : '🔭 You are not signed up for any upcoming shifts.',
       ephemeral: true
     });
   }
@@ -232,7 +391,7 @@ client.on('interactionCreate', async i => {
         embeds: [
           new EmbedBuilder()
             .setColor(0xff0000)
-            .setTitle(`❌ CANCELLED — ${ev.title}`)
+            .setTitle(`❌ CANCELLED – ${ev.title}`)
             .setDescription('This shift has been cancelled.')
         ]
       });
@@ -283,15 +442,211 @@ client.on('interactionCreate', async i => {
 
     return i.reply({ content: '✅ Event time updated.', ephemeral: true });
   }
+
+  /* SET STATUS */
+  if (i.commandName === 'setstatus') {
+    if (!hasEventPermission(i.member))
+      return i.reply({ content: '❌ No permission.', ephemeral: true });
+
+    const status = i.options.getString('status');
+    const type = i.options.getString('type') || 'Playing';
+
+    customStatus = { status, type };
+
+    client.user.setPresence({
+      activities: [{
+        name: status,
+        type: ActivityType[type]
+      }],
+      status: 'online'
+    });
+
+    return i.reply({ content: `✅ Status set to: ${type} ${status}`, ephemeral: true });
+  }
+
+  /* CLEAR STATUS */
+  if (i.commandName === 'statusclear') {
+    if (!hasEventPermission(i.member))
+      return i.reply({ content: '❌ No permission.', ephemeral: true });
+
+    customStatus = null;
+    setDefaultStatus();
+
+    return i.reply({ content: '✅ Status cleared, reverted to default.', ephemeral: true });
+  }
+
+  /* ADD BLACKOUT */
+  if (i.commandName === 'addblackout') {
+    if (!hasEventPermission(i.member))
+      return i.reply({ content: '❌ No permission.', ephemeral: true });
+
+    const dateStr = i.options.getString('date');
+    const dt = DateTime.fromISO(dateStr, { zone: TIMEZONE });
+
+    if (!dt.isValid)
+      return i.reply({ content: '❌ Invalid date format. Use YYYY-MM-DD', ephemeral: true });
+
+    if (blackoutDates.includes(dateStr))
+      return i.reply({ content: '⚠️ Date already in blackout list.', ephemeral: true });
+
+    blackoutDates.push(dateStr);
+    save(BLACKOUT_FILE, blackoutDates);
+
+    return i.reply({ content: `✅ Added blackout date: ${dateStr}`, ephemeral: true });
+  }
+
+  /* REMOVE BLACKOUT */
+  if (i.commandName === 'removeblackout') {
+    if (!hasEventPermission(i.member))
+      return i.reply({ content: '❌ No permission.', ephemeral: true });
+
+    const dateStr = i.options.getString('date');
+    const idx = blackoutDates.indexOf(dateStr);
+
+    if (idx === -1)
+      return i.reply({ content: '⚠️ Date not found in blackout list.', ephemeral: true });
+
+    blackoutDates.splice(idx, 1);
+    save(BLACKOUT_FILE, blackoutDates);
+
+    return i.reply({ content: `✅ Removed blackout date: ${dateStr}`, ephemeral: true });
+  }
+
+  /* LIST BLACKOUTS */
+  if (i.commandName === 'listblackouts') {
+    if (!blackoutDates.length)
+      return i.reply({ content: '📅 No blackout dates set.', ephemeral: true });
+
+    const sorted = blackoutDates.sort();
+    return i.reply({
+      content: `📅 **Blackout Dates:**\n${sorted.map(d => `• ${d}`).join('\n')}`,
+      ephemeral: true
+    });
+  }
+});
+
+/* ───────── REACTION HANDLER ───────── */
+client.on('messageReactionAdd', async (reaction, user) => {
+  if (user.bot) return;
+
+  // Fetch partial reactions
+  if (reaction.partial) {
+    try {
+      await reaction.fetch();
+    } catch {
+      return;
+    }
+  }
+
+  const messageId = reaction.message.id;
+  const ev = events[messageId];
+  
+  if (!ev || ev.cancelled) return;
+
+  const emoji = reaction.emoji.name;
+  const role = roleConfig[emoji];
+
+  if (!role) return; // Not a signup emoji
+
+  // Check if role is disabled
+  if (disabledRoles.includes(role)) {
+    await reaction.users.remove(user.id);
+    try {
+      await user.send(`⚠️ Sorry, the **${role}** role is currently disabled for signups.`);
+    } catch {}
+    return;
+  }
+
+  // Remove user from all other roles for this event (one role per person)
+  for (const [r, users] of Object.entries(ev.signups)) {
+    const idx = users.indexOf(user.id);
+    if (idx > -1) {
+      users.splice(idx, 1);
+    }
+  }
+
+  // Add user to the selected role
+  if (!ev.signups[role]) ev.signups[role] = [];
+  if (!ev.signups[role].includes(user.id)) {
+    ev.signups[role].push(user.id);
+  }
+
+  save(DATA_FILE, events);
+
+  // Update the message embed
+  try {
+    const embed = new EmbedBuilder()
+      .setColor(0x00b0f4)
+      .setTitle(ev.title)
+      .setDescription(
+        `🕒 **When:** ${formatTime(ev.datetime)}\n\n${buildSignupList(ev.signups)}`
+      )
+      .setFooter({ text: 'React to sign up!' });
+
+    await reaction.message.edit({ embeds: [embed] });
+  } catch {}
+});
+
+client.on('messageReactionRemove', async (reaction, user) => {
+  if (user.bot) return;
+
+  // Fetch partial reactions
+  if (reaction.partial) {
+    try {
+      await reaction.fetch();
+    } catch {
+      return;
+    }
+  }
+
+  const messageId = reaction.message.id;
+  const ev = events[messageId];
+  
+  if (!ev || ev.cancelled) return;
+
+  const emoji = reaction.emoji.name;
+  const role = roleConfig[emoji];
+
+  if (!role) return;
+
+  // Remove user from this role
+  const users = ev.signups[role] || [];
+  const idx = users.indexOf(user.id);
+  if (idx > -1) {
+    users.splice(idx, 1);
+  }
+
+  save(DATA_FILE, events);
+
+  // Update the message embed
+  try {
+    const embed = new EmbedBuilder()
+      .setColor(0x00b0f4)
+      .setTitle(ev.title)
+      .setDescription(
+        `🕒 **When:** ${formatTime(ev.datetime)}\n\n${buildSignupList(ev.signups)}`
+      )
+      .setFooter({ text: 'React to sign up!' });
+
+    await reaction.message.edit({ embeds: [embed] });
+  } catch {}
 });
 
 /* ───────── READY ───────── */
 client.once('ready', () => {
   console.log(`✅ Logged in as ${client.user.tag}`);
+  
+  setDefaultStatus();
+  
   Object.keys(events).forEach(id => {
     scheduleReminder(id);
     scheduleBackupAlert(id);
   });
+
+  scheduleAutoPost();
+  
+  // Run auto-post check on startup (in case bot was down during post time)
+  setTimeout(autoPostWeeklyShifts, 5000);
 });
 
 client.login(TOKEN);

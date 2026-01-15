@@ -1,6 +1,6 @@
-# 🎉 Retro Replay Bot Rewrite V2.1.3
+# 🎉 Retro Replay Bot Rewrite V2.2.2
 
-A comprehensive **Discord.js v14** bot designed for managing bar/club staff scheduling with **emoji-based signups**, **automated shift posting**, **backup alerts**, **role management**, and **detailed analytics**.
+A comprehensive **Discord.js v14** bot designed for managing bar/club staff scheduling with **emoji-based signups**, **automated shift posting**, **backup alerts**, **role management**, and **detailed shift logging**.
 
 Perfect for RP servers, virtual clubs, bars, and any staff-driven community that needs organized shift management.
 
@@ -9,43 +9,49 @@ Perfect for RP servers, virtual clubs, bars, and any staff-driven community that
 ## ✨ Key Features
 
 ### 🤖 Automated Shift Management
-- **Auto-posting** at 5 PM GMT on configured open days
+- **Daily auto-posting** at 5 PM London time on configured open days
 - Shifts automatically scheduled for 9 PM EST
 - Smart blackout date system to skip closed days
 - Automatic shift reminders when events start
 - Backup alerts 2 hours before understaffed shifts (excludes disabled roles)
+- One shift per day - prevents duplicate postings
 
 ### 📅 Event System
-- `/createevent` - Create custom events with pre-filled modal forms
 - Emoji-based role signups (react to join, unreact to leave)
 - Live-updating embeds showing current staff roster
-- Multiple role signups per user supported
-- Unix timestamps with live countdowns
+- **One role per user** - selecting new role removes old signup
+- Automatic reaction cleanup for disabled roles
+- Date/time format: **DD-MM-YYYY 12HR** (e.g., 15-01-2026 9:00 PM)
 
 ### 🎛️ Role Management
-- `!disable [1-6]` - Globally disable specific roles from signups
-- `!enable [1-6]` - Re-enable previously disabled roles
+- Globally disable specific roles from signups
+- Re-enable previously disabled roles
 - Disabled roles persist across all events and bot restarts
 - Existing signups preserved when roles are disabled
-- New signups blocked for disabled roles
+- New signups blocked for disabled roles with DM notification
 - Disabled roles excluded from backup alerts
 
-### 📊 Analytics & Tracking
-- `/shiftstats` - View top contributors and role breakdowns
-- Automatic shift logging for record-keeping
-- Track signup patterns over 7/30 days or all time
-- Export historical data for management review
-
 ### 🎭 Dynamic Bot Status
-- Rotating status: "Watching: Drinking At The Bar" ↔ "Playing: Now Hiring"
-- `/setstatus` - Set custom status messages for events
-- Temporary or permanent status overrides
-- Automatically resumes rotation after timer expires
+- **Default status:** "Watching: 🍸 Shifts at the Retro Bar"
+- `/setstatus` - Set custom status messages (Playing/Watching/Listening/Competing)
+- `/statusclear` - Return to default status
+- Custom status persists until manually cleared
 
-### 🔐 Permission System
+### 🗓️ Blackout Date System
+- `/addblackout` - Block specific dates from auto-posting (YYYY-MM-DD format)
+- `/removeblackout` - Unblock dates and resume normal scheduling
+- `/listblackouts` - View all currently blocked dates
+- Bot skips blackout dates when posting shifts
+
+### 📊 Shift Logging
+- Automatic logging when shifts start
+- Historical records stored in `shift_logs.json`
+- Track all completed shifts with full signup details
+
+### 🔒 Permission System
 - Role-based access control for management commands
-- Separate permissions for event creation and viewing
 - Configurable manager roles in `config.json`
+- Commands require roles: Owner, Head Manager, or Manager
 
 ---
 
@@ -55,23 +61,19 @@ Perfect for RP servers, virtual clubs, bars, and any staff-driven community that
 
 | Command | Description |
 |---------|-------------|
-| `/nextshift` | View the next scheduled shift with countdown |
-| `/roster [days]` | Display upcoming shifts (default: 7 days) |
-| `/shiftstats [period]` | View signup statistics and top contributors |
-| `/help` | Display all available commands and bot features |
+| `/mysignups` | View all your upcoming shift signups |
 
 ### ⚙️ Manager Commands (Restricted)
 
 | Command | Description |
 |---------|-------------|
-| `/createevent` | Manually create a shift event with custom details |
-| `/blackout add [date]` | Block a specific date from auto-posting |
-| `/blackout remove [date]` | Unblock a date and resume normal scheduling |
-| `/blackout list` | View all currently blocked dates |
-| `/shiftlogs [count]` | View archived shift records (default: 5) |
-| `/setstatus [type] [message] [duration]` | Set custom bot status temporarily |
-| `!disable [1-6]` | Disable a role globally (blocks new signups, keeps existing) |
-| `!enable [1-6]` | Re-enable a previously disabled role |
+| `/cancelevent [messageid]` | Cancel a shift event (marks as cancelled, updates embed) |
+| `/editeventtime [messageid] [datetime]` | Edit shift start time (format: DD-MM-YYYY h:mm AM/PM) |
+| `/addblackout [date]` | Block a date from auto-posting (format: YYYY-MM-DD) |
+| `/removeblackout [date]` | Unblock a previously blackout date |
+| `/listblackouts` | View all currently blocked dates |
+| `/setstatus [status] [type]` | Set custom bot status (optional: Playing/Watching/Listening/Competing) |
+| `/statusclear` | Clear custom status and return to default |
 
 ---
 
@@ -79,16 +81,16 @@ Perfect for RP servers, virtual clubs, bars, and any staff-driven community that
 
 React with these emojis on shift posts to sign up:
 
-| Emoji | Role | Number | Description |
-|-------|------|--------|-------------|
-| 1️⃣ | Active Manager | 1 | Primary shift leader |
-| 2️⃣ | Backup Manager | 2 | Secondary manager on duty |
-| 3️⃣ | Bouncer | 3 | Security and door control |
-| 4️⃣ | Bartender | 4 | Bar service staff |
-| 5️⃣ | Dancer | 5 | Entertainment performer |
-| 6️⃣ | DJ | 6 | Music and atmosphere |
+| Emoji | Role | Description |
+|-------|------|-------------|
+| 1️⃣ | Active Manager | Primary shift leader |
+| 2️⃣ | Backup Manager | Secondary manager on duty |
+| 3️⃣ | Bouncer | Security and door control |
+| 4️⃣ | Bartender | Bar service staff |
+| 5️⃣ | Dancer | Entertainment performer |
+| 6️⃣ | DJ | Music and atmosphere |
 
-**Multi-role signups allowed** - Staff can sign up for multiple positions per shift.
+**One role per shift** - Selecting a new role automatically removes your previous signup for that shift.
 
 ---
 
@@ -98,9 +100,9 @@ React with these emojis on shift posts to sign up:
 Retro-Replay-V2/
 ├── bot.js                    # Main bot file
 ├── config.json               # Server configuration
-├── .env                      # Bot credentials
+├── .env                      # Bot credentials (KEEP SECRET!)
 ├── scheduled_events.json     # Active events (auto-created)
-├── auto_posted.json          # Auto-post tracking (auto-created)
+├── auto_posted.json          # Daily post tracking (auto-created)
 ├── blackout_dates.json       # Closed dates (auto-created)
 ├── shift_logs.json           # Historical records (auto-created)
 ├── disabled_roles.json       # Globally disabled roles (auto-created)
@@ -116,27 +118,35 @@ Retro-Replay-V2/
 ```env
 BOT_TOKEN=your_discord_bot_token_here
 CLIENT_ID=your_bot_application_id_here
+SIGNUP_CHANNEL_ID=channel_id_for_shift_posts
+BAR_STAFF_ROLE_ID=role_id_to_ping_for_shifts
 ```
+
+**⚠️ CRITICAL: Never share your .env file or bot token publicly! Regenerate token immediately if exposed.**
 
 ### `config.json` File
 ```json
 {
-  "signupChannelId": "CHANNEL_ID_WHERE_EVENTS_POST",
   "openDays": ["Tuesday", "Friday", "Saturday", "Sunday"],
   "eventCreatorRoles": [
     "Owner",
     "Head Manager",
     "Manager"
   ],
-  "barStaffRoleId": "ROLE_ID_TO_PING_FOR_SHIFTS"
+  "timezone": "America/New_York",
+  "autoPostTimezone": "Europe/London",
+  "autoPostHour": 17,
+  "shiftStartHour": 21
 }
 ```
 
 **Configuration Options:**
-- `signupChannelId` - Channel where shift signups are posted
-- `openDays` - Days of the week the bar operates (auto-posts on these days)
-- `eventCreatorRoles` - Discord roles that can manage events and use `!disable`/`!enable`
-- `barStaffRoleId` - Role to ping for reminders and alerts
+- `openDays` - Days of the week the bar operates (bot posts on these days only)
+- `eventCreatorRoles` - Discord roles that can use management commands
+- `timezone` - Timezone for shift times (America/New_York = EST)
+- `autoPostTimezone` - Timezone for auto-posting checks (Europe/London = GMT)
+- `autoPostHour` - Hour to check for auto-posting (17 = 5 PM)
+- `shiftStartHour` - Hour shifts start (21 = 9 PM)
 
 ---
 
@@ -151,7 +161,8 @@ CLIENT_ID=your_bot_application_id_here
   - Read Message History
   - Use Slash Commands
   - Read Messages/View Channels
-- **Message Content Intent** enabled in Discord Developer Portal (required for `!disable`/`!enable` commands)
+  - Manage Messages (for reaction removal)
+- **Message Content Intent** enabled in Discord Developer Portal
 
 ### Installation Steps
 
@@ -167,8 +178,8 @@ CLIENT_ID=your_bot_application_id_here
    ```
 
 3. **Configure environment**
-   - Create `.env` file with your bot token and client ID
-   - Edit `config.json` with your server's channel/role IDs
+   - Create `.env` file with your bot token, client ID, channel ID, and role ID
+   - Edit `config.json` with your server's settings
 
 4. **Enable Message Content Intent**
    - Go to [Discord Developer Portal](https://discord.com/developers/applications)
@@ -194,35 +205,38 @@ CLIENT_ID=your_bot_application_id_here
 ## 🧠 How It Works
 
 ### Automated Shift Posting
-1. Bot checks every minute if it's 5 PM GMT
-2. If today is an "open day" and not blacked out, creates shift event
-3. Event is posted for 9 PM EST that same evening
-4. Signup emojis are automatically added to the message
-5. Disabled roles are marked as `~~*Disabled*~~` in the embed
+1. Bot checks every 10 minutes if it's 5 PM London time
+2. If today matches an "open day" in config AND is not blacked out:
+   - Creates shift event for 9 PM EST tonight
+   - Posts to configured signup channel
+   - Adds reaction emojis automatically
+   - Pings bar staff role
+3. Tracks posting by date to prevent duplicates
+4. Disabled roles show as `~~Disabled~~` in embed
 
 ### Signup System
-1. Users react with role emojis to sign up
-2. Bot updates the embed instantly with their username
-3. Removing reaction removes user from that role
-4. All changes persist across bot restarts
-5. Reactions for disabled roles are automatically removed
-
-### Role Management System
-1. Managers use `!disable [number]` to block signups for a role
-2. Existing signups are preserved, but new signups are blocked
-3. Disabled status applies globally to all current and future events
-4. Role stays disabled until a manager runs `!enable [number]`
-5. All event embeds update to show disabled status
+1. Users react with 1️⃣-6️⃣ to sign up for roles
+2. Bot automatically removes their previous role signup (one role per shift)
+3. Embed updates instantly with their username
+4. Removing reaction removes user from that role
+5. All changes persist across bot restarts
+6. Reactions for disabled roles are auto-removed with DM notification
 
 ### Reminder & Alert Flow
-1. **2 hours before shift** - Backup alert sent if **enabled** roles are empty
-2. **At shift start** - Reminder ping sent to all bar staff
-3. **After shift starts** - Event archived to shift logs
+1. **2 hours before shift** - Backup alert if **enabled** roles have no signups
+2. **At shift start** - Reminder ping to all bar staff
+3. **After shift starts** - Event logged to `shift_logs.json`
 
 ### Blackout Dates
-- Use `/blackout add` to prevent auto-posting on specific dates
-- Bot skips blacked-out dates when calculating next shifts
-- Useful for holidays, maintenance, or special closures
+- Use `/addblackout` with format YYYY-MM-DD (e.g., 2026-12-25)
+- Bot skips blackout dates during daily auto-post checks
+- Use `/removeblackout` to re-enable posting on that date
+- Use `/listblackouts` to see all blocked dates
+
+### Event Management
+- `/cancelevent` - Marks event as cancelled, updates embed to red
+- `/editeventtime` - Updates shift time, reschedules reminders/alerts
+- Format dates as **DD-MM-YYYY h:mm AM/PM** (e.g., 25-12-2026 9:00 PM)
 
 ---
 
@@ -233,72 +247,68 @@ The bot creates and manages several JSON files:
 | File | Purpose | Safe to Delete? |
 |------|---------|-----------------|
 | `scheduled_events.json` | Active shift events | ❌ No - will lose active signups |
-| `auto_posted.json` | Tracks posted dates | ✅ Yes - only prevents duplicates |
+| `auto_posted.json` | Daily post tracking | ✅ Yes - only prevents duplicates |
 | `blackout_dates.json` | Closed dates list | ⚠️ Caution - will resume posting |
-| `shift_logs.json` | Historical archives | ⚠️ Caution - will lose stats |
+| `shift_logs.json` | Historical archives | ⚠️ Caution - will lose history |
 | `disabled_roles.json` | Globally disabled roles | ⚠️ Caution - will re-enable all roles |
 
 ---
 
 ## 🎯 Usage Examples
 
-### Creating a Special Event
-```
-/createevent
-→ Modal appears with pre-filled next shift
-→ Edit title to "Grand Opening Night"
-→ Adjust time if needed
-→ Submit → Event posted!
-```
-
 ### Blocking a Holiday
 ```
-/blackout add date:2026-12-25
+/addblackout date:2026-12-25
 → Christmas Day blocked from auto-posting
-→ Staff won't see a shift posted that day
+→ No shift will be posted on this date
 ```
 
-### Disabling a Role Temporarily
+### Editing a Shift Time
 ```
-!disable 6
-→ DJ role disabled globally
-→ Existing DJ signups preserved
-→ New people can't sign up as DJ
-→ All event embeds update to show "DJ: ~~*Disabled*~~"
-→ Backup alerts won't ping for missing DJs
-
-!enable 6
-→ DJ role re-enabled
-→ Staff can sign up as DJ again
+/editeventtime messageid:123456789 datetime:25-12-2026 10:00 PM
+→ Shift time updated to 10 PM
+→ Reminders and alerts rescheduled
+→ Embed updated with new time
 ```
 
-### Checking Signup Stats
+### Setting Custom Status
 ```
-/shiftstats period:Last 30 days
-→ View top 10 contributors
-→ See which roles are most popular
-→ Identify reliable staff members
+/setstatus status:Grand Opening Tonight! type:Playing
+→ Bot status: "Playing: Grand Opening Tonight!"
+→ Persists until you run /statusclear
 ```
 
-### Setting Event Status
+### Checking Your Signups
 ```
-/setstatus type:Playing message:Anniversary Party Tonight duration:180
-→ Status shows "Playing: Anniversary Party Tonight"
-→ After 3 hours, returns to normal rotation
+/mysignups
+→ Lists all your upcoming shifts with roles and times
+```
+
+### Managing Blackouts
+```
+/listblackouts
+→ Shows: • 2026-12-25
+         • 2026-01-01
+         • 2026-07-04
+
+/removeblackout date:2026-07-04
+→ July 4th removed from blackout list
+→ Shifts will resume posting on this date
 ```
 
 ---
 
 ## 📝 Important Notes
 
-- **Timezone:** All times are in EST (America/New_York)
-- **Auto-posting:** Happens at 5 PM GMT = 12 PM EST
+- **Timezone:** All shift times displayed in EST (America/New_York)
+- **Auto-posting:** Checks daily at 5 PM London time (12 PM EST)
 - **Shift time:** Always 9 PM EST on open days
-- **Data persistence:** All files are critical for operation
-- **Permissions:** Event creator roles defined in config.json
-- **Message Content Intent:** Required for `!disable`/`!enable` commands
-- **Disabled roles:** Apply globally and persist across restarts
-- **Backup alerts:** Only trigger for enabled roles with no signups
+- **Date format:** DD-MM-YYYY h:mm AM/PM for all displays and commands
+- **Blackout format:** YYYY-MM-DD for blackout commands only
+- **Data persistence:** All JSON files are critical for operation
+- **One role per shift:** Users can only hold one role per event
+- **Message Content Intent:** Required for reaction handling
+- **Token security:** Never share your bot token - regenerate if exposed
 
 ---
 
@@ -306,33 +316,61 @@ The bot creates and manages several JSON files:
 
 **Bot isn't posting shifts automatically**
 - Check that current day is in `openDays` config
-- Verify no blackout date is set for today
+- Verify no blackout date is set for today (`/listblackouts`)
 - Ensure bot has permission to post in signup channel
-- Check bot is running at 5 PM GMT
-- Verify bot is online and connected
+- Verify bot is running during the 5 PM London time window
+- Check console logs for "Auto-posted" or skip messages
 
-**Reactions aren't adding users**
-- Verify bot has "Add Reactions" permission
+**Reactions aren't working**
+- Verify bot has "Add Reactions" and "Manage Messages" permissions
 - Check that message ID exists in `scheduled_events.json`
-- Ensure user isn't already signed up for that role
-- Check if role is disabled (`!enable [number]` to fix)
+- Ensure Message Content Intent is enabled in Developer Portal
+- Check if role is disabled (`disabled_roles.json`)
+- Verify bot can send DMs to users
 
 **Commands not appearing**
 - Bot needs "Use Application Commands" permission
+- Commands register automatically on startup
 - Try re-inviting bot with updated permissions
 - Restart bot after permission changes
+- Check console for "Logged in as" message
 
-**`!disable` and `!enable` not working**
-- Ensure "Message Content Intent" is enabled in Developer Portal
-- Verify user has a role listed in `eventCreatorRoles`
-- Check bot has permission to read messages in that channel
-- Restart bot after enabling Message Content Intent
+**Signup removed immediately after reacting**
+- This is normal if the role is disabled
+- Check `disabled_roles.json` file
+- User should receive a DM explaining the role is disabled
+- Re-enable role if needed (requires custom command implementation)
 
-**Disabled role still allows signups**
-- Check `disabled_roles.json` file exists and contains the role
-- Verify role name matches exactly (e.g., "DJ" not "Dj")
-- Try disabling and re-enabling the role
-- Restart bot to reload disabled roles list
+**Backup alerts not triggering**
+- Alerts only fire for enabled roles with no signups
+- Check 2 hours before shift time
+- Verify disabled roles are properly excluded
+- Ensure bot can send messages in the channel
+
+**Event time showing wrong timezone**
+- Check `timezone` setting in `config.json`
+- Format is always DD-MM-YYYY h:mm AM/PM in configured timezone
+- Auto-posting uses `autoPostTimezone` setting
+
+---
+
+## 🔄 Version History
+
+**V2.2.0** (Current)
+- Changed auto-posting from weekly to daily
+- Added `/addblackout`, `/removeblackout`, `/listblackouts` commands
+- Added `/setstatus` and `/statusclear` commands
+- Implemented dynamic bot status system
+- Changed to one role per user per shift (auto-removes previous role)
+- Fixed config to use `.env` for channel and role IDs
+- Improved reaction handling with DM notifications
+- Standardized date format to DD-MM-YYYY 12HR throughout
+- Added automatic shift logging when events start
+
+**V2.1.3** (Previous)
+- Weekly shift posting system
+- Multi-role signups per user
+- Basic role disable/enable system
 
 ---
 
@@ -354,4 +392,4 @@ For support, questions, or feature requests, please open an issue on GitHub or c
 
 ---
 
-**Retro Replay Bot Rewrite V2.1.3** - Making shift management effortless 🎉
+**Retro Replay Bot Rewrite V2.2.2** - Making shift management effortless 🎉

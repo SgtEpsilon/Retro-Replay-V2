@@ -1,14 +1,10 @@
 {
-  "token": "",
-  "clientId": "",
-  "signupChannelId": "CHANNEL_ID",
   "openDays": ["Tuesday", "Friday", "Saturday", "Sunday"],
   "eventCreatorRoles": [
     "Owner",
     "Head Manager",
     "Manager"
   ],
-  "barStaffRoleId": "ROLE_ID",
   "timezone": "America/New_York",
   "autoPostTimezone": "Europe/London",
   "autoPostHour": 17,
