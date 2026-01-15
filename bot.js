@@ -284,7 +284,7 @@ function checkAndAutoPost() {
 /* ───────── BOT STATUS ───────── */
 const statuses = [
   {
-    name: 'The Bar',
+    name: 'Drinking At The Bar',
     type: ActivityType.Watching
   },
   {
