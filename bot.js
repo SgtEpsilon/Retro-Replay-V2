@@ -1,5 +1,5 @@
 /***********************
- * Retro Replay Bot Rewrite V2.1.2
+ * Retro Replay Bot Rewrite V2.1.3
  * Discord.js v14
  ***********************/
 
@@ -36,6 +36,7 @@ const DATA_FILE = path.join(__dirname, 'scheduled_events.json');
 const AUTO_POST_FILE = path.join(__dirname, 'auto_posted.json');
 const BLACKOUT_FILE = path.join(__dirname, 'blackout_dates.json');
 const SHIFT_LOG_FILE = path.join(__dirname, 'shift_logs.json');
+const DISABLED_ROLES_FILE = path.join(__dirname, 'disabled_roles.json');
 const SIGNUP_CHANNEL = config.signupChannelId;
 const BAR_STAFF_ROLE_ID = config.barStaffRoleId;
 
@@ -44,7 +45,8 @@ const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.GuildMessageReactions
+    GatewayIntentBits.GuildMessageReactions,
+    GatewayIntentBits.MessageContent
   ],
   partials: [Partials.Message, Partials.Reaction, Partials.Channel]
 });
@@ -56,6 +58,7 @@ let backupAlertTimers = {};
 let autoPosted = {};
 let blackoutDates = [];
 let shiftLogs = [];
+let disabledRoles = []; // Global list of disabled roles
 
 if (fs.existsSync(DATA_FILE)) {
   try {
@@ -89,6 +92,14 @@ if (fs.existsSync(SHIFT_LOG_FILE)) {
   }
 }
 
+if (fs.existsSync(DISABLED_ROLES_FILE)) {
+  try {
+    disabledRoles = JSON.parse(fs.readFileSync(DISABLED_ROLES_FILE));
+  } catch {
+    disabledRoles = [];
+  }
+}
+
 function saveEvents() {
   fs.writeFileSync(DATA_FILE, JSON.stringify(events, null, 2));
 }
@@ -103,6 +114,10 @@ function saveBlackoutDates() {
 
 function saveShiftLogs() {
   fs.writeFileSync(SHIFT_LOG_FILE, JSON.stringify(shiftLogs, null, 2));
+}
+
+function saveDisabledRoles() {
+  fs.writeFileSync(DISABLED_ROLES_FILE, JSON.stringify(disabledRoles, null, 2));
 }
 
 /* ───────── PERMISSIONS ───────── */
@@ -122,6 +137,16 @@ const roleConfig = {
   '6️⃣': 'DJ'
 };
 
+// Map role names to numbers for ! commands
+const roleNumbers = {
+  '1': 'Active Manager',
+  '2': 'Backup Manager',
+  '3': 'Bouncer',
+  '4': 'Bartender',
+  '5': 'Dancer',
+  '6': 'DJ'
+};
+
 /* ───────── HELPERS ───────── */
 function formatEST(ms) {
   return DateTime.fromMillis(ms)
@@ -129,8 +154,15 @@ function formatEST(ms) {
     .toFormat('cccc, LLL d @ h:mm a');
 }
 
-function buildSignupList(signups) {
+function buildSignupList(signups, eventId) {
   return Object.entries(roleConfig).map(([emoji, role]) => {
+    // Check if role is globally disabled
+    const isDisabled = disabledRoles.includes(role);
+    
+    if (isDisabled) {
+      return `**${emoji} ${role}:** ~~*Disabled*~~`;
+    }
+    
     const users = signups[role] || [];
     return `**${emoji} ${role}:**\n${
       users.length
@@ -198,6 +230,9 @@ function scheduleBackupAlert(eventId) {
     try {
       const emptyRoles = Object.entries(roleConfig)
         .map(([emoji, role]) => {
+          // Skip disabled roles
+          if (disabledRoles.includes(role)) return null;
+          
           const signups = ev.signups[role] || [];
           return signups.length === 0 ? role : null;
         })
@@ -227,7 +262,7 @@ async function createAutoEvent(shiftDate) {
     .setDescription(
       `🕒 **When:** ${formatEST(shiftDate.toMillis())} (EST)\n` +
       `⏳ **Starts:** <t:${unix}:R>\n\n` +
-      buildSignupList({})
+      buildSignupList({}, msg.id)
     )
     .setTimestamp();
 
@@ -284,7 +319,7 @@ function checkAndAutoPost() {
 /* ───────── BOT STATUS ───────── */
 const statuses = [
   {
-    name: 'Drinking At The Bar',
+    name: 'The Bar',
     type: ActivityType.Watching
   },
   {
@@ -521,7 +556,7 @@ client.on('interactionCreate', async interaction => {
       .setDescription(
         `🕒 **When:** ${formatEST(dt.toMillis())} (EST)\n` +
         `⏳ **Starts:** <t:${unix}:R>\n\n` +
-        buildSignupList({})
+        buildSignupList({}, msg.id)
       )
       .setTimestamp();
 
@@ -837,7 +872,7 @@ async function updateEventEmbed(message) {
     .setDescription(
       `🕒 **When:** ${formatEST(ev.datetime)} (EST)\n` +
       `⏳ **Starts:** <t:${unix}:R>\n\n` +
-      buildSignupList(ev.signups)
+      buildSignupList(ev.signups, message.id)
     )
     .setTimestamp();
 
@@ -852,6 +887,13 @@ client.on('messageReactionAdd', async (reaction, user) => {
   const ev = events[reaction.message.id];
   const role = roleConfig[reaction.emoji.name];
   if (!ev || !role || ev.cancelled) return;
+
+  // Check if role is globally disabled
+  if (disabledRoles.includes(role)) {
+    // Remove the reaction if role is disabled
+    await reaction.users.remove(user.id);
+    return;
+  }
 
   ev.signups[role] ??= [];
   if (!ev.signups[role].includes(user.id)) {
@@ -875,6 +917,81 @@ client.on('messageReactionRemove', async (reaction, user) => {
 
   saveEvents();
   await updateEventEmbed(reaction.message);
+});
+
+/* ───────── TEXT COMMANDS ───────── */
+client.on('messageCreate', async (message) => {
+  if (message.author.bot) return;
+  if (!message.content.startsWith('!')) return;
+
+  const args = message.content.slice(1).trim().split(/\s+/);
+  const command = args[0].toLowerCase();
+
+  // !disable [role_number] - Toggle role availability globally (Manager only)
+  if (command === 'disable' || command === 'enable') {
+    // Check permissions
+    const member = message.member;
+    if (!hasEventPermission(member)) {
+      return message.reply('❌ You need manager permissions to use this command.');
+    }
+
+    const roleNum = args[1];
+    
+    if (!roleNum || !roleNumbers[roleNum]) {
+      return message.reply('Usage: `!disable [1-6]` or `!enable [1-6]`\n1=Manager, 2=Backup, 3=Bouncer, 4=Bartender, 5=Dancer, 6=DJ');
+    }
+
+    const roleName = roleNumbers[roleNum];
+    const isCurrentlyDisabled = disabledRoles.includes(roleName);
+
+    if (command === 'disable') {
+      if (isCurrentlyDisabled) {
+        return message.reply(`⚠️ **${roleName}** is already disabled globally.`);
+      }
+      
+      // Disable the role globally
+      disabledRoles.push(roleName);
+      saveDisabledRoles();
+      
+      // Update all active event embeds in this channel
+      let updatedCount = 0;
+      for (const [msgId, ev] of Object.entries(events)) {
+        if (ev.channelId === message.channel.id && !ev.cancelled) {
+          try {
+            const eventMessage = await message.channel.messages.fetch(msgId);
+            await updateEventEmbed(eventMessage);
+            updatedCount++;
+          } catch {}
+        }
+      }
+      
+      await message.reply(`🚫 **${roleName}** signups are now disabled globally. Existing signups preserved. Updated ${updatedCount} event(s).`);
+    } else {
+      // enable
+      if (!isCurrentlyDisabled) {
+        return message.reply(`⚠️ **${roleName}** is already enabled.`);
+      }
+      
+      // Enable the role globally
+      const index = disabledRoles.indexOf(roleName);
+      disabledRoles.splice(index, 1);
+      saveDisabledRoles();
+      
+      // Update all active event embeds in this channel
+      let updatedCount = 0;
+      for (const [msgId, ev] of Object.entries(events)) {
+        if (ev.channelId === message.channel.id && !ev.cancelled) {
+          try {
+            const eventMessage = await message.channel.messages.fetch(msgId);
+            await updateEventEmbed(eventMessage);
+            updatedCount++;
+          } catch {}
+        }
+      }
+      
+      await message.reply(`✅ **${roleName}** signups are now enabled globally. Updated ${updatedCount} event(s).`);
+    }
+  }
 });
 
 /* ───────── READY ───────── */
