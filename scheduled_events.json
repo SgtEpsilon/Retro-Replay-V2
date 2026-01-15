@@ -20,5 +20,12 @@
       "Backup Manager": []
     },
     "cancelled": false
+  },
+  "1461365158868815895": {
+    "title": "Friday Night Shift",
+    "datetime": 1768615200000,
+    "channelId": "1460772328517533893",
+    "signups": {},
+    "cancelled": false
   }
 }

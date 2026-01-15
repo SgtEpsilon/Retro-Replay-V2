@@ -1,5 +1,5 @@
 /***********************
- * Retro Replay Bot v29.6
+ * Retro Replay Bot Rewrite V2.1.0
  * Discord.js v14
  ***********************/
 
@@ -33,6 +33,7 @@ const TOKEN = process.env.BOT_TOKEN;
 const CLIENT_ID = process.env.CLIENT_ID;
 const TIMEZONE = 'America/New_York';
 const DATA_FILE = path.join(__dirname, 'scheduled_events.json');
+const AUTO_POST_FILE = path.join(__dirname, 'auto_posted.json');
 const SIGNUP_CHANNEL = config.signupChannelId;
 const BAR_STAFF_ROLE_ID = config.barStaffRoleId;
 
@@ -49,6 +50,7 @@ const client = new Client({
 /* ───────── STORAGE ───────── */
 let events = {};
 let reminderTimers = {};
+let autoPosted = {};
 
 if (fs.existsSync(DATA_FILE)) {
   try {
@@ -58,8 +60,20 @@ if (fs.existsSync(DATA_FILE)) {
   }
 }
 
+if (fs.existsSync(AUTO_POST_FILE)) {
+  try {
+    autoPosted = JSON.parse(fs.readFileSync(AUTO_POST_FILE));
+  } catch {
+    autoPosted = {};
+  }
+}
+
 function saveEvents() {
   fs.writeFileSync(DATA_FILE, JSON.stringify(events, null, 2));
+}
+
+function saveAutoPosted() {
+  fs.writeFileSync(AUTO_POST_FILE, JSON.stringify(autoPosted, null, 2));
 }
 
 /* ───────── PERMISSIONS ───────── */
@@ -119,6 +133,92 @@ function isTodayOpen() {
   return config.openDays.includes(
     DateTime.now().setZone(TIMEZONE).toFormat('cccc')
   );
+}
+
+/* ───────── AUTO POST EVENT ───────── */
+async function createAutoEvent(shiftDate) {
+  const title = getAutoTitle(shiftDate);
+  const unix = Math.floor(shiftDate.toSeconds());
+
+  const embed = new EmbedBuilder()
+    .setColor(0x00b0f4)
+    .setTitle(title)
+    .setDescription(
+      `🕒 **When:** ${formatEST(shiftDate.toMillis())} (EST)\n` +
+      `⏳ **Starts:** <t:${unix}:R>\n\n` +
+      buildSignupList({})
+    )
+    .setTimestamp();
+
+  const channel = await client.channels.fetch(SIGNUP_CHANNEL);
+  const msg = await channel.send({ embeds: [embed] });
+
+  events[msg.id] = {
+    title,
+    datetime: shiftDate.toMillis(),
+    channelId: channel.id,
+    signups: {},
+    cancelled: false
+  };
+
+  saveEvents();
+  scheduleReminder(msg.id);
+
+  for (const emoji of Object.keys(roleConfig)) {
+    await msg.react(emoji);
+  }
+
+  console.log(`✅ Auto-posted event: ${title}`);
+}
+
+function checkAndAutoPost() {
+  const nowGMT = DateTime.now().setZone('Europe/London');
+  const nowEST = DateTime.now().setZone(TIMEZONE);
+  
+  // Check if it's 5 PM GMT (17:00)
+  if (nowGMT.hour !== 17 || nowGMT.minute !== 0) return;
+
+  const todayEST = nowEST.toFormat('cccc');
+  
+  // Check if today is an open day
+  if (!config.openDays.includes(todayEST)) return;
+
+  // Create date key to track if we already posted today
+  const dateKey = nowEST.toFormat('yyyy-MM-dd');
+  
+  // If already posted today, skip
+  if (autoPosted[dateKey]) return;
+
+  // Get tonight's shift (9 PM EST today)
+  const shiftDate = nowEST.set({ hour: 21, minute: 0, second: 0, millisecond: 0 });
+
+  // Post the event
+  createAutoEvent(shiftDate).then(() => {
+    autoPosted[dateKey] = true;
+    saveAutoPosted();
+  }).catch(err => {
+    console.error('❌ Auto-post failed:', err);
+  });
+}
+
+/* ───────── BOT STATUS ───────── */
+const statuses = [
+  {
+    name: 'The Bar',
+    type: ActivityType.Watching
+  },
+  {
+    name: 'Now Hiring',
+    type: ActivityType.Playing
+  }
+];
+
+let currentStatusIndex = 0;
+
+function rotateStatus() {
+  const status = statuses[currentStatusIndex];
+  client.user.setActivity(status.name, { type: status.type });
+  currentStatusIndex = (currentStatusIndex + 1) % statuses.length;
 }
 
 /* ───────── REMINDERS ───────── */
@@ -318,6 +418,15 @@ client.on('messageReactionRemove', async (reaction, user) => {
 /* ───────── READY ───────── */
 client.once('ready', () => {
   console.log(`✅ Logged in as ${client.user.tag}`);
+  
+  // Set initial status and start rotation
+  rotateStatus();
+  setInterval(rotateStatus, 30000); // Rotate every 30 seconds
+  
+  // Check for auto-posting every minute
+  setInterval(checkAndAutoPost, 60000); // Check every 60 seconds
+  checkAndAutoPost(); // Check immediately on startup
+  
   Object.keys(events).forEach(scheduleReminder);
 });
 

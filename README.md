@@ -70,25 +70,6 @@ Users may sign up for **any combination of roles**.
 
 ---
 
-## 📁 Project Structure
-
-```text
-Retro-Replay-V2/
-├── bot.js
-├── config.json
-├── .env
-├── scheduled_events.json   # Auto-created (DO NOT DELETE)
-├── handlers/
-│   ├── interactionHandler.js
-│   ├── reactionHandler.js
-├── services/
-│   ├── eventStore.js
-│   ├── eventHelpers.js
-│   ├── updateEmbed.js
-│   ├── signupRules.js
-└── README.md
-
-
 ⚙️ Configuration
 .env
 ```text
