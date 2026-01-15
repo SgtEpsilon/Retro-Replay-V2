@@ -1,5 +1,5 @@
 /***********************
- * Retro Replay Bot Rewrite V2.1.1
+ * Retro Replay Bot Rewrite V2.1.2
  * Discord.js v14
  ***********************/
 
@@ -294,11 +294,53 @@ const statuses = [
 ];
 
 let currentStatusIndex = 0;
+let customStatusTimer = null;
+let isCustomStatus = false;
 
 function rotateStatus() {
+  if (isCustomStatus) return; // Don't rotate if custom status is active
+  
   const status = statuses[currentStatusIndex];
   client.user.setActivity(status.name, { type: status.type });
   currentStatusIndex = (currentStatusIndex + 1) % statuses.length;
+}
+
+function setCustomStatus(type, message, durationMinutes = 0) {
+  isCustomStatus = true;
+  
+  // Clear existing custom status timer
+  if (customStatusTimer) {
+    clearTimeout(customStatusTimer);
+    customStatusTimer = null;
+  }
+  
+  // Map string type to ActivityType
+  const activityTypes = {
+    'playing': ActivityType.Playing,
+    'watching': ActivityType.Watching,
+    'listening': ActivityType.Listening,
+    'competing': ActivityType.Competing
+  };
+  
+  client.user.setActivity(message, { type: activityTypes[type] });
+  
+  // If duration is set, revert after time expires
+  if (durationMinutes > 0) {
+    customStatusTimer = setTimeout(() => {
+      isCustomStatus = false;
+      rotateStatus();
+      console.log('✅ Custom status expired, resuming rotation');
+    }, durationMinutes * 60 * 1000);
+  }
+}
+
+function clearCustomStatus() {
+  if (customStatusTimer) {
+    clearTimeout(customStatusTimer);
+    customStatusTimer = null;
+  }
+  isCustomStatus = false;
+  rotateStatus();
 }
 
 /* ───────── REMINDERS ───────── */
@@ -385,7 +427,29 @@ const commands = [
 
   new SlashCommandBuilder()
     .setName('help')
-    .setDescription('View all available commands and their usage')
+    .setDescription('View all available commands and their usage'),
+
+  new SlashCommandBuilder()
+    .setName('setstatus')
+    .setDescription('Set a custom bot status for a period of time')
+    .addStringOption(option =>
+      option.setName('type')
+        .setDescription('Activity type')
+        .setRequired(true)
+        .addChoices(
+          { name: 'Playing', value: 'playing' },
+          { name: 'Watching', value: 'watching' },
+          { name: 'Listening to', value: 'listening' },
+          { name: 'Competing in', value: 'competing' }
+        ))
+    .addStringOption(option =>
+      option.setName('message')
+        .setDescription('Status message')
+        .setRequired(true))
+    .addIntegerOption(option =>
+      option.setName('duration')
+        .setDescription('Duration in minutes (0 = permanent until changed)')
+        .setRequired(false))
 ];
 
 const rest = new REST({ version: '10' }).setToken(TOKEN);
@@ -689,7 +753,8 @@ client.on('interactionCreate', async interaction => {
     const managerCommands = [
       '`/createevent` - Manually create a new shift signup event',
       '`/blackout add/remove/list` - Manage dates when the bar is closed',
-      '`/shiftlogs` - View archived records of past shifts and who worked'
+      '`/shiftlogs` - View archived records of past shifts and who worked',
+      '`/setstatus` - Set a custom bot status message for a period of time'
     ];
 
     const featuresText = [
@@ -726,6 +791,36 @@ client.on('interactionCreate', async interaction => {
       .setTimestamp();
 
     return interaction.reply({ embeds: [embed], ephemeral: true });
+  }
+
+  /* SET STATUS */
+  if (interaction.isChatInputCommand() &&
+      interaction.commandName === 'setstatus') {
+
+    if (!hasEventPermission(interaction.member))
+      return interaction.reply({ content: '❌ No permission.', ephemeral: true });
+
+    const type = interaction.options.getString('type');
+    const message = interaction.options.getString('message');
+    const duration = interaction.options.getInteger('duration') || 0;
+
+    setCustomStatus(type, message, duration);
+
+    const typeLabel = {
+      'playing': 'Playing',
+      'watching': 'Watching',
+      'listening': 'Listening to',
+      'competing': 'Competing in'
+    };
+
+    const durationText = duration > 0 
+      ? `for **${duration} minutes**` 
+      : 'until manually changed';
+
+    return interaction.reply({ 
+      content: `✅ Status set to "${typeLabel[type]} ${message}" ${durationText}`, 
+      ephemeral: true 
+    });
   }
 });
 
