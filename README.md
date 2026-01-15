@@ -38,7 +38,7 @@ Perfect for RP servers, virtual clubs, bars, and any staff-driven community that
 - Custom status persists until manually cleared
 
 ### 🗓️ Blackout Date System
-- `/addblackout` - Block specific dates from auto-posting (YYYY-MM-DD format)
+- `/addblackout` - Block specific dates from auto-posting (DD-MM-YYYY format)
 - `/removeblackout` - Unblock dates and resume normal scheduling
 - `/listblackouts` - View all currently blocked dates
 - Bot skips blackout dates when posting shifts
@@ -356,7 +356,7 @@ The bot creates and manages several JSON files:
 
 ## 🔄 Version History
 
-**V2.2.0** (Current)
+**V2.2.2** (Current)
 - Changed auto-posting from weekly to daily
 - Added `/addblackout`, `/removeblackout`, `/listblackouts` commands
 - Added `/setstatus` and `/statusclear` commands
