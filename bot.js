@@ -292,7 +292,9 @@ const commands = [
     .setName('editeventtime')
     .setDescription('Edit event start time')
     .addStringOption(o =>
-      o.setName('messageid').setRequired(true))
+      o.setName('messageid')
+        .setDescription('Event message ID')
+        .setRequired(true))
     .addStringOption(o =>
       o.setName('datetime')
         .setDescription('DD-MM-YYYY h:mm AM/PM')
