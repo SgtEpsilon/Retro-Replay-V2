@@ -1,6 +1,6 @@
-# 🎉 Retro Replay Bot Rewrite V2.3.1
+# 🎉 Retro Replay Bot Rewrite V2.3.4
 
-A comprehensive **Discord.js v14** bot designed for managing bar/club staff scheduling with **emoji-based signups**, **automated shift posting**, **backup alerts**, **role management**, and **detailed shift logging**.
+A comprehensive **Discord.js v14** bot designed for managing bar/club staff scheduling with **emoji-based signups**, **automated shift posting**, **multi-stage backup alerts**, **role management**, and **detailed shift logging**.
 
 Perfect for RP servers, virtual clubs, bars, and any staff-driven community that needs organized shift management.
 
@@ -14,7 +14,11 @@ Perfect for RP servers, virtual clubs, bars, and any staff-driven community that
 - **Duplicate shift prevention** - Scans last 100 messages to prevent duplicate posts
 - Smart blackout date system to skip closed days
 - Automatic shift reminders when events start
-- Backup alerts 2 hours before understaffed shifts (excludes disabled roles)
+- **Multi-stage backup alerts** sent to #staff-chat:
+  - 2 hours before shift
+  - 5 minutes before shift
+  - At shift start time
+- Backup alerts exclude disabled roles
 - One shift per day - prevents duplicate postings
 
 ### 📅 Event System
@@ -23,6 +27,7 @@ Perfect for RP servers, virtual clubs, bars, and any staff-driven community that
 - **One role per user** - selecting new role removes old signup
 - Automatic reaction cleanup for disabled roles
 - Date/time format: **DD-MM-YYYY 12HR** (e.g., 15-01-2026 9:00 PM)
+- Manual event creation via modal form with `/createevent`
 
 ### 🎛️ Role Management
 - `/disable` - Globally disable specific roles from signups via dropdown menu
@@ -71,6 +76,7 @@ Perfect for RP servers, virtual clubs, bars, and any staff-driven community that
 
 | Command | Description |
 |---------|-------------|
+| `/createevent` | Create a new shift event using modal form |
 | `/cancelevent [messageid]` | Cancel a shift event (marks as cancelled, updates embed) |
 | `/editeventtime [messageid] [datetime]` | Edit shift start time (format: DD-MM-YYYY h:mm AM/PM) |
 | `/enable [role]` | Enable a disabled role for signups (dropdown selection) |
@@ -125,10 +131,14 @@ Retro-Replay-V2/
 BOT_TOKEN=your_discord_bot_token_here
 CLIENT_ID=your_bot_application_id_here
 SIGNUP_CHANNEL_ID=channel_id_for_shift_posts
+STAFF_CHAT_CHANNEL_ID=channel_id_for_backup_alerts
 BAR_STAFF_ROLE_ID=role_id_to_ping_for_shifts
 ```
 
 **⚠️ CRITICAL: Never share your .env file or bot token publicly! Regenerate token immediately if exposed.**
+
+**New in V2.3.4:**
+- `STAFF_CHAT_CHANNEL_ID` - Channel where backup alerts are sent (separate from signup channel)
 
 ### `config.json` File
 ```json
@@ -184,7 +194,8 @@ BAR_STAFF_ROLE_ID=role_id_to_ping_for_shifts
    ```
 
 3. **Configure environment**
-   - Create `.env` file with your bot token, client ID, channel ID, and role ID
+   - Create `.env` file with your bot token, client ID, channel IDs, and role ID
+   - **NEW:** Add `STAFF_CHAT_CHANNEL_ID` for backup alerts
    - Edit `config.json` with your server's settings
 
 4. **Enable Message Content Intent**
@@ -229,10 +240,35 @@ BAR_STAFF_ROLE_ID=role_id_to_ping_for_shifts
 5. All changes persist across bot restarts
 6. Reactions for disabled roles are auto-removed with DM notification
 
-### Reminder & Alert Flow
-1. **2 hours before shift** - Backup alert if **enabled** roles have no signups
-2. **At shift start** - Reminder ping to all bar staff
-3. **After shift starts** - Event logged to `shift_logs.json`
+### Multi-Stage Backup Alert System (NEW in V2.3.4)
+The bot now sends backup alerts at **three different times** to #staff-chat:
+
+1. **2 hours before shift** - First warning for unfilled positions
+2. **5 minutes before shift** - Urgent alert if still understaffed
+3. **At shift start time** - Final alert for missing positions
+
+**Alert Features:**
+- Only mentions roles that are **enabled** and have **no signups**
+- Sent to dedicated #staff-chat channel (not signup channel)
+- Includes shift title and timeframe in message
+- Pings relevant Discord roles (e.g., @Bartender, @Bouncer)
+- Special handling for Backup Manager (pings @Manager or @Head Manager)
+
+**Example Alert:**
+```
+⚠️ BACKUP NEEDED (5 minutes) for Friday Night Shift
+Missing positions:
+@Bartender
+@Bouncer
+**DJ**
+```
+
+### Reminder Flow
+1. **2 hours before shift** - First backup alert to #staff-chat (if positions unfilled)
+2. **5 minutes before shift** - Second backup alert to #staff-chat (if positions unfilled)
+3. **At shift start** - Final backup alert to #staff-chat (if positions unfilled)
+4. **At shift start** - Shift start reminder ping in signup channel to all bar staff
+5. **After shift starts** - Event logged to `shift_logs.json`
 
 ### Blackout Dates
 - Use `/addblackout` with format YYYY-MM-DD (e.g., 2026-12-25)
@@ -247,8 +283,9 @@ BAR_STAFF_ROLE_ID=role_id_to_ping_for_shifts
 - Disabled status persists in `disabled_roles.json`
 
 ### Event Management
+- `/createevent` - Opens modal form to create custom shift event
 - `/cancelevent` - Marks event as cancelled, updates embed to red
-- `/editeventtime` - Updates shift time, reschedules reminders/alerts
+- `/editeventtime` - Updates shift time, reschedules all reminders and alerts
 - Format dates as **DD-MM-YYYY h:mm AM/PM** (e.g., 25-12-2026 9:00 PM)
 
 ---
@@ -268,6 +305,17 @@ The bot creates and manages several JSON files:
 ---
 
 ## 🎯 Usage Examples
+
+### Creating a Custom Event
+```
+/createevent
+→ Modal opens with three fields:
+  • Event Title: "Saturday Special Event"
+  • Date: 25-01-2026
+  • Time: 10:00 PM
+→ Event created and posted to signup channel
+→ All reminders and alerts automatically scheduled
+```
 
 ### Managing Roles
 ```
@@ -292,7 +340,7 @@ The bot creates and manages several JSON files:
 ```
 /editeventtime messageid:123456789 datetime:25-12-2026 10:00 PM
 → Shift time updated to 10 PM
-→ Reminders and alerts rescheduled
+→ All reminders and alerts rescheduled (2hr, 5min, start)
 → Embed updated with new time
 ```
 
@@ -357,6 +405,8 @@ The bot creates and manages several JSON files:
 - **Message Content Intent:** Required for reaction handling
 - **Token security:** Never share your bot token - regenerate if exposed
 - **Duplicate prevention:** Bot scans last 100 messages to prevent duplicate shift posts
+- **Backup alerts:** Sent to #staff-chat at 2 hours, 5 minutes, and shift start time
+- **Staff chat required:** Must configure STAFF_CHAT_CHANNEL_ID for backup alerts to work
 
 ---
 
@@ -369,6 +419,13 @@ The bot creates and manages several JSON files:
 - Verify bot is running during the 5 PM London time window
 - Check console logs for "Auto-posted" or skip messages
 - Look for "already exists" messages indicating duplicate prevention
+
+**Backup alerts not being sent**
+- Verify `STAFF_CHAT_CHANNEL_ID` is set in `.env` file
+- Ensure bot has "View Channel" and "Send Messages" permissions in #staff-chat
+- Check console logs for staff chat access verification on startup
+- Alerts only trigger for enabled roles with no signups
+- Bot logs "backup alert not sent" if channel is misconfigured
 
 **Reactions aren't working**
 - Verify bot has "Add Reactions" and "Manage Messages" permissions
@@ -390,12 +447,6 @@ The bot creates and manages several JSON files:
 - User should receive a DM explaining the role is disabled
 - Manager can use `/enable` to re-enable the role
 
-**Backup alerts not triggering**
-- Alerts only fire for enabled roles with no signups
-- Check 2 hours before shift time
-- Verify disabled roles are properly excluded
-- Ensure bot can send messages in the channel
-
 **Event time showing wrong timezone**
 - Check `timezone` setting in `config.json`
 - Format is always DD-MM-YYYY h:mm AM/PM in configured timezone
@@ -407,11 +458,33 @@ The bot creates and manages several JSON files:
 - Verify bot has "Read Message History" permission
 - Check if `scheduled_events.json` has duplicate entries
 
+**Multiple backup alerts for same shift**
+- This is expected behavior in V2.3.4
+- Alerts sent at: 2 hours before, 5 minutes before, and at start
+- Each alert only mentions positions still unfilled at that time
+- If position gets filled, it won't appear in subsequent alerts
+
 ---
 
 ## 📄 Version History
 
-**V2.3.1** (Current)
+**V2.3.4** (Current)
+- **NEW:** Multi-stage backup alert system (2 hours, 5 minutes, at start)
+- **NEW:** Dedicated #staff-chat channel for backup alerts
+- **NEW:** Added `STAFF_CHAT_CHANNEL_ID` to `.env` configuration
+- Backup alerts now include timeframe in message
+- Improved backup alert scheduling with three separate timers
+- Enhanced error handling for staff chat channel access
+- Added staff chat verification on bot startup
+- All three backup alert timers properly cleared on event cancel/reschedule
+- Shift start reminders still sent to signup channel
+
+**V2.3.3**
+- Added `/createevent` command with modal form interface
+- Improved manual event creation workflow
+- Enhanced user experience for custom shift creation
+
+**V2.3.1** (Previous)
 - Added `/enable` command with dropdown role selection
 - Added `/disable` command with dropdown role selection
 - Added `/help` command with comprehensive command list and categories
@@ -422,7 +495,7 @@ The bot creates and manages several JSON files:
 - Enhanced role management with intuitive dropdown menus
 - Added detailed help embed organized by command categories
 
-**V2.3.0** (Previous)
+**V2.3.0**
 - Changed auto-posting from weekly to daily
 - Added `/addblackout`, `/removeblackout`, `/listblackouts` commands
 - Added `/setstatus` and `/statusclear` commands
@@ -458,4 +531,4 @@ For support, questions, or feature requests, please open an issue on GitHub or c
 
 ---
 
-**Retro Replay Bot Rewrite V2.3.1** - Making shift management effortless 🎉
+**Retro Replay Bot Rewrite V2.3.4** - Making shift management effortless 🎉
