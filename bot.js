@@ -144,10 +144,679 @@ const roleConfig = {
 function buildSignupList(signups) {
   return Object.entries(roleConfig).map(([emoji, role]) => {
     if (disabledRoles.includes(role))
+      return `**${emoji} ${role}:** ~~Disabled~~`;
+
+    const users = signups[role] || [];
+    return `**${emoji} ${role}:**\n${
+      users.length
+        ? users.map(u => `• <@${u}>`).join('\n')
+        : '*No signups yet*'
+    }`;
+  }).join('\n\n');
+}
+
+/* ───────── DUPLICATE SHIFT CHECK ───────── */
+async function checkForDuplicateShift(channel, shiftDate) {
+  try {
+    const messages = await channel.messages.fetch({ limit: 100 });
+    const shiftDay = DateTime.fromMillis(shiftDate).setZone(TIMEZONE).toFormat('EEEE');
+    const expectedTitle = `🍸 ${shiftDay} Night Shift`;
+    
+    for (const [id, message] of messages) {
+      if (message.author.id === client.user.id && message.embeds.length > 0) {
+        const embed = message.embeds[0];
+        
+        if (embed.title === expectedTitle) {
+          const existingEvent = events[id];
+          if (existingEvent && !existingEvent.cancelled) {
+            const existingDate = DateTime.fromMillis(existingEvent.datetime).setZone(TIMEZONE).toISODate();
+            const newDate = DateTime.fromMillis(shiftDate).setZone(TIMEZONE).toISODate();
+            
+            if (existingDate === newDate) {
+              console.log(`✅ Shift for ${shiftDay} (${newDate}) already exists (Message ID: ${id})`);
+              return true;
+            }
+          }
+        }
+      }
+    }
+    
+    return false;
+  } catch (err) {
+    console.error('⚠️ Error checking for duplicate shift:', err.message);
+    return false;
+  }
+}
+
+/* ───────── AUTO POST LOGIC ───────── */
+async function autoPostWeeklyShifts() {
+  try {
+    if (!SIGNUP_CHANNEL) {
+      console.error('❌ SIGNUP_CHANNEL_ID not configured in .env');
+      return;
+    }
+
+    const channel = await client.channels.fetch(SIGNUP_CHANNEL).catch(err => {
+      console.error('❌ Cannot access signup channel. Check bot permissions and channel ID.');
+      console.error('   Channel ID:', SIGNUP_CHANNEL);
+      console.error('   Error:', err.message);
+      return null;
+    });
+    
+    if (!channel) return;
+
+    if (!channel.permissionsFor(client.user).has(['SendMessages', 'AddReactions', 'ViewChannel'])) {
+      console.error('❌ Bot missing required permissions in signup channel');
+      console.error('   Required: View Channel, Send Messages, Add Reactions');
+      return;
+    }
+
+    const now = DateTime.now().setZone(AUTO_POST_TIMEZONE);
+    const today = now.toFormat('EEEE');
+    const dateKey = now.toISODate();
+
+    if (!config.openDays.includes(today)) {
+      console.log(`⏭️ Today (${today}) is not an open day, skipping auto-post.`);
+      return;
+    }
+
+    if (autoPosted[dateKey]) {
+      console.log(`✅ Already auto-posted for ${dateKey}`);
+      return;
+    }
+
+    if (isBlackoutDate(now.toMillis())) {
+      console.log(`🚫 Today (${dateKey}) is a blackout date, skipping auto-post.`);
+      return;
+    }
+
+    const shiftTime = now.set({ 
+      hour: SHIFT_START_HOUR, 
+      minute: 0, 
+      second: 0 
+    }).setZone(TIMEZONE);
+
+    const isDuplicate = await checkForDuplicateShift(channel, shiftTime.toMillis());
+    if (isDuplicate) {
+      console.log(`⏭️ Shift for ${today} (${dateKey}) already posted, skipping duplicate.`);
+      autoPosted[dateKey] = Date.now();
+      save(AUTO_POST_FILE, autoPosted);
+      return;
+    }
+
+    const title = `🍸 ${today} Night Shift`;
+    const signups = Object.fromEntries(
+      Object.values(roleConfig).map(role => [role, []])
+    );
+
+    const embed = new EmbedBuilder()
+      .setColor(0x00b0f4)
+      .setTitle(title)
+      .setDescription(
+        `🕒 **When:** ${formatTime(shiftTime.toMillis())}\n\n${buildSignupList(signups)}`
+      )
+      .setFooter({ text: 'React to sign up!' });
+
+    const msg = await channel.send({ 
+      content: `<@&${BAR_STAFF_ROLE_ID}> New shift posted!`,
+      embeds: [embed] 
+    });
+
+    for (const emoji of Object.keys(roleConfig)) {
+      await msg.react(emoji);
+    }
+
+    events[msg.id] = {
+      id: msg.id,
+      title,
+      datetime: shiftTime.toMillis(),
+      channelId: channel.id,
+      signups,
+      cancelled: false
+    };
+
+    scheduleReminder(msg.id);
+    scheduleBackupAlert(msg.id);
+
+    save(DATA_FILE, events);
+    
+    autoPosted[dateKey] = Date.now();
+    save(AUTO_POST_FILE, autoPosted);
+
+    console.log(`✅ Auto-posted shift for ${today}, ${dateKey}`);
+  } catch (err) {
+    console.error('❌ Auto-post error:', err);
+  }
+}
+
+function scheduleAutoPost() {
+  setInterval(async () => {
+    const now = DateTime.now().setZone(AUTO_POST_TIMEZONE);
+    
+    if (now.hour === AUTO_POST_HOUR && now.minute < 10) {
+      await autoPostWeeklyShifts();
+    }
+  }, 10 * 60 * 1000);
+}
+
+/* ───────── SCHEDULING ───────── */
+function scheduleReminder(id) {
+  const ev = events[id];
+  if (!ev || ev.cancelled) return;
+
+  const delay = ev.datetime - Date.now();
+  if (delay <= 0) return;
+
+  reminderTimers[id] = setTimeout(async () => {
+    try {
+      const channel = await client.channels.fetch(ev.channelId);
+      await channel.send(`🔔 **Shift starting now!** <@&${BAR_STAFF_ROLE_ID}>`);
+      shiftLogs.push({ ...ev, timestamp: Date.now() });
+      save(SHIFT_LOG_FILE, shiftLogs);
+    } catch (err) {
+      console.error('⚠️ Reminder error:', err.message);
+    }
+  }, delay);
+}
+
+function scheduleBackupAlert(id) {
+  const ev = events[id];
+  if (!ev || ev.cancelled) return;
+
+  // Alert 2 hours before
+  const alertTime2Hours = ev.datetime - 2 * 60 * 60 * 1000;
+  const delay2Hours = alertTime2Hours - Date.now();
+  
+  if (delay2Hours > 0) {
+    backupAlertTimers[id] = setTimeout(async () => {
+      await sendBackupAlert(ev, '2 hours');
+    }, delay2Hours);
+  }
+
+  // Alert 5 minutes before
+  const alertTime5Min = ev.datetime - 5 * 60 * 1000;
+  const delay5Min = alertTime5Min - Date.now();
+  
+  if (delay5Min > 0) {
+    backupAlert5MinTimers[id] = setTimeout(async () => {
+      await sendBackupAlert(ev, '5 minutes');
+    }, delay5Min);
+  }
+
+  // Alert at start time
+  const delayStart = ev.datetime - Date.now();
+  
+  if (delayStart > 0) {
+    backupAlertStartTimers[id] = setTimeout(async () => {
+      await sendBackupAlert(ev, 'now (shift starting)');
+    }, delayStart);
+  }
+}
+
+async function sendBackupAlert(ev, timeframe) {
+  const missing = Object.values(roleConfig).filter(
+    r => !disabledRoles.includes(r) && !(ev.signups[r]?.length)
+  );
+  if (!missing.length) return;
+
+  try {
+    if (!STAFF_CHAT_CHANNEL) {
+      console.error('⚠️ STAFF_CHAT_CHANNEL_ID not configured in .env - backup alert not sent');
+      return;
+    }
+
+    const staffChannel = await client.channels.fetch(STAFF_CHAT_CHANNEL).catch(err => {
+      console.error('⚠️ Cannot access staff chat channel for backup alert');
+      console.error('   Channel ID:', STAFF_CHAT_CHANNEL);
+      console.error('   Error:', err.message);
+      return null;
+    });
+
+    if (!staffChannel) {
+      console.error('❌ Staff chat channel not found, backup alert not sent');
+      return;
+    }
+
+    const signupChannel = await client.channels.fetch(ev.channelId);
+    const guild = signupChannel.guild;
+    
+    const roleMentions = [];
+    for (const missingRole of missing) {
+      let discordRole = null;
+      
+      if (missingRole === 'Backup Manager') {
+        discordRole = guild.roles.cache.find(r => 
+          r.name.toLowerCase() === 'manager' || r.name.toLowerCase() === 'head manager'
+        );
+      } else {
+        discordRole = guild.roles.cache.find(r => 
+          r.name.toLowerCase() === missingRole.toLowerCase()
+        );
+      }
+      
+      if (discordRole) {
+        roleMentions.push(`<@&${discordRole.id}>`);
+      } else {
+        roleMentions.push(`**${missingRole}**`);
+      }
+    }
+    
+    await staffChannel.send(
+      `⚠️ **BACKUP NEEDED** (${timeframe}) for ${ev.title}\nMissing positions:\n${roleMentions.join('\n')}`
+    );
+  } catch (err) {
+    console.error('⚠️ Backup alert error:', err.message);
+  }
+}
+
+/* ───────── SLASH COMMANDS ───────── */
+const commands = [
+  new SlashCommandBuilder()
+    .setName('createevent')
+    .setDescription('Create a new shift event'),
+
+  new SlashCommandBuilder()
+    .setName('mysignups')
+    .setDescription('View your upcoming signups'),
+
+  new SlashCommandBuilder()
+    .setName('nextshift')
+    .setDescription('View the next upcoming shift'),
+
+  new SlashCommandBuilder()
+    .setName('areweopen')
+    .setDescription('Check if the bar is open today'),
+
+  new SlashCommandBuilder()
+    .setName('cancelevent')
+    .setDescription('Cancel an event')
+    .addStringOption(o =>
+      o.setName('messageid').setDescription('Event message ID').setRequired(true)),
+
+  new SlashCommandBuilder()
+    .setName('editeventtime')
+    .setDescription('Edit event start time')
+    .addStringOption(o =>
+      o.setName('messageid')
+        .setDescription('Event message ID')
+        .setRequired(true))
+    .addStringOption(o =>
+      o.setName('datetime')
+        .setDescription('DD-MM-YYYY h:mm AM/PM')
+        .setRequired(true)),
+
+  new SlashCommandBuilder()
+    .setName('setstatus')
+    .setDescription('Set custom bot status')
+    .addStringOption(o =>
+      o.setName('status')
+        .setDescription('Status text')
+        .setRequired(true))
+    .addStringOption(o =>
+      o.setName('type')
+        .setDescription('Activity type')
+        .addChoices(
+          { name: 'Playing', value: 'Playing' },
+          { name: 'Watching', value: 'Watching' },
+          { name: 'Listening', value: 'Listening' },
+          { name: 'Competing', value: 'Competing' }
+        )),
+
+  new SlashCommandBuilder()
+    .setName('statusclear')
+    .setDescription('Clear custom status and return to default'),
+
+  new SlashCommandBuilder()
+    .setName('addblackout')
+    .setDescription('Add a blackout date (no shifts)')
+    .addStringOption(o =>
+      o.setName('date')
+        .setDescription('Date (YYYY-MM-DD)')
+        .setRequired(true)),
+
+  new SlashCommandBuilder()
+    .setName('removeblackout')
+    .setDescription('Remove a blackout date')
+    .addStringOption(o =>
+      o.setName('date')
+        .setDescription('Date (YYYY-MM-DD)')
+        .setRequired(true)),
+
+  new SlashCommandBuilder()
+    .setName('listblackouts')
+    .setDescription('List all blackout dates'),
+
+  new SlashCommandBuilder()
+    .setName('enable')
+    .setDescription('Enable a role for signups')
+    .addStringOption(o =>
+      o.setName('role')
+        .setDescription('Role to enable')
+        .setRequired(true)
+        .addChoices(
+          { name: 'Active Manager', value: 'Active Manager' },
+          { name: 'Backup Manager', value: 'Backup Manager' },
+          { name: 'Bouncer', value: 'Bouncer' },
+          { name: 'Bartender', value: 'Bartender' },
+          { name: 'Dancer', value: 'Dancer' },
+          { name: 'DJ', value: 'DJ' }
+        )),
+
+  new SlashCommandBuilder()
+    .setName('disable')
+    .setDescription('Disable a role for signups')
+    .addStringOption(o =>
+      o.setName('role')
+        .setDescription('Role to disable')
+        .setRequired(true)
+        .addChoices(
+          { name: 'Active Manager', value: 'Active Manager' },
+          { name: 'Backup Manager', value: 'Backup Manager' },
+          { name: 'Bouncer', value: 'Bouncer' },
+          { name: 'Bartender', value: 'Bartender' },
+          { name: 'Dancer', value: 'Dancer' },
+          { name: 'DJ', value: 'DJ' }
+        )),
+
+  new SlashCommandBuilder()
+    .setName('help')
+    .setDescription('Display all available commands')
+];
+
+const rest = new REST({ version: '10' }).setToken(TOKEN);
+
+(async () => {
+  try {
+    await rest.put(Routes.applicationCommands(CLIENT_ID), {
+      body: commands.map(c => c.toJSON())
+    });
+    console.log('✅ Slash commands registered');
+  } catch (err) {
+    console.error('❌ Error registering commands:', err);
+  }
+})();
+
+/* ───────── INTERACTIONS ───────── */
+client.on('interactionCreate', async i => {
+  try {
+    if (i.isChatInputCommand() && i.commandName === 'createevent') {
+      if (!hasEventPermission(i.member))
+        return await i.reply({ content: '❌ No permission.', ephemeral: true });
+
+      const modal = new ModalBuilder()
+        .setCustomId('createEventModal')
+        .setTitle('Create New Shift Event');
+
+      const titleInput = new TextInputBuilder()
+        .setCustomId('eventTitle')
+        .setLabel('Event Title')
+        .setStyle(TextInputStyle.Short)
+        .setPlaceholder('e.g., Friday Night Shift')
+        .setRequired(true)
+        .setMaxLength(100);
+
+      const dateInput = new TextInputBuilder()
+        .setCustomId('eventDate')
+        .setLabel('Date (DD-MM-YYYY)')
+        .setStyle(TextInputStyle.Short)
+        .setPlaceholder('e.g., 25-01-2026')
+        .setRequired(true)
+        .setMaxLength(10);
+
+      const timeInput = new TextInputBuilder()
+        .setCustomId('eventTime')
+        .setLabel('Time (h:mm AM/PM)')
+        .setStyle(TextInputStyle.Short)
+        .setPlaceholder('e.g., 9:00 PM')
+        .setRequired(true)
+        .setMaxLength(10);
+
+      const firstRow = new ActionRowBuilder().addComponents(titleInput);
+      const secondRow = new ActionRowBuilder().addComponents(dateInput);
+      const thirdRow = new ActionRowBuilder().addComponents(timeInput);
+
+      modal.addComponents(firstRow, secondRow, thirdRow);
+
+      await i.showModal(modal);
+      return;
+    }
+
+    if (i.isModalSubmit() && i.customId === 'createEventModal') {
+      const title = i.fields.getTextInputValue('eventTitle');
+      const dateStr = i.fields.getTextInputValue('eventDate');
+      const timeStr = i.fields.getTextInputValue('eventTime');
+
+      const datetimeStr = `${dateStr} ${timeStr}`;
+      const dt = DateTime.fromFormat(datetimeStr, 'dd-MM-yyyy h:mm a', { zone: TIMEZONE });
+
+      if (!dt.isValid) {
+        return await i.reply({
+          content: '❌ Invalid date/time format. Please use:\n• Date: DD-MM-YYYY (e.g., 25-01-2026)\n• Time: h:mm AM/PM (e.g., 9:00 PM)',
+          ephemeral: true
+        });
+      }
+
+      if (dt.toMillis() < Date.now()) {
+        return await i.reply({
+          content: '❌ Cannot create an event in the past.',
+          ephemeral: true
+        });
+      }
+
+      await i.deferReply({ ephemeral: true });
+
+      try {
+        const channel = await client.channels.fetch(SIGNUP_CHANNEL);
+        
+        const signups = Object.fromEntries(
+          Object.values(roleConfig).map(role => [role, []])
+        );
+
+        const embed = new EmbedBuilder()
+          .setColor(0x00b0f4)
+          .setTitle(title)
+          .setDescription(
+            `🕒 **When:** ${formatTime(dt.toMillis())}\n\n${buildSignupList(signups)}`
+          )
+          .setFooter({ text: 'React to sign up!' });
+
+        const msg = await channel.send({
+          content: `<@&${BAR_STAFF_ROLE_ID}> New shift posted!`,
+          embeds: [embed]
+        });
+
+        for (const emoji of Object.keys(roleConfig)) {
+          await msg.react(emoji);
+        }
+
+        events[msg.id] = {
+          id: msg.id,
+          title,
+          datetime: dt.toMillis(),
+          channelId: channel.id,
+          signups,
+          cancelled: false
+        };
+
+        scheduleReminder(msg.id);
+        scheduleBackupAlert(msg.id);
+        save(DATA_FILE, events);
+
+        await i.editReply({
+          content: `✅ Event created successfully!\n**${title}**\n🕒 ${formatTime(dt.toMillis())}\n📝 Message ID: ${msg.id}`
+        });
+      } catch (err) {
+        console.error('❌ Error creating event:', err);
+        await i.editReply({
+          content: '❌ Failed to create event. Check bot permissions in the signup channel.'
+        });
+      }
+      return;
+    }
+
+    if (!i.isChatInputCommand()) return;
+
+    if (i.commandName === 'mysignups') {
+      const userId = i.user.id;
+      const results = [];
+
+      for (const ev of Object.values(events)) {
+        if (ev.cancelled || ev.datetime < Date.now()) continue;
+        for (const [role, users] of Object.entries(ev.signups)) {
+          if (users.includes(userId))
+            results.push(`• **${ev.title}** — ${role}\n  🕒 ${formatTime(ev.datetime)}`);
+        }
+      }
+
+      return await i.reply({
+        content: results.length
+          ? `📋 **Your Signups:**\n\n${results.join('\n')}`
+          : '🔭 You are not signed up for any upcoming shifts.',
+        ephemeral: true
+      });
+    }
+
+    if (i.commandName === 'nextshift') {
+      const now = DateTime.now().setZone(TIMEZONE);
+      let nextOpenDate = null;
+      
+      for (let j = 0; j < 14; j++) {
+        const checkDate = now.plus({ days: j });
+        const dayName = checkDate.toFormat('EEEE');
+        const shiftTime = checkDate.set({ hour: 21, minute: 0, second: 0, millisecond: 0 });
+        
+        if (config.openDays.includes(dayName) && shiftTime > now) {
+          nextOpenDate = shiftTime;
+          break;
+        }
+      }
+
+      if (!nextOpenDate) {
+        return await i.reply({
+          content: '📅 No upcoming open days found in the next 2 weeks.',
+          ephemeral: true
+        });
+      }
+
+      const unixTimestamp = Math.floor(nextOpenDate.toMillis() / 1000);
+      const dayName = nextOpenDate.toFormat('EEEE');
+
+      const embed = new EmbedBuilder()
+        .setColor(0x00b0f4)
+        .setTitle('📅 Next Open Day')
+        .addFields(
+          { name: 'Day', value: `${dayName} Night`, inline: false },
+          { name: 'Shift Starts', value: `<t:${unixTimestamp}:F>`, inline: false },
+          { name: 'Countdown', value: `<t:${unixTimestamp}:R>`, inline: false }
+        )
+        .setFooter({ text: 'All times shown in your local timezone' });
+
+      return await i.reply({ embeds: [embed], ephemeral: true });
+    }
+
+    if (i.commandName === 'areweopen') {
+      const now = DateTime.now().setZone(TIMEZONE);
+      const today = now.toFormat('EEEE');
+      const todayAt9PM = now.set({ hour: 21, minute: 0, second: 0, millisecond: 0 });
+
+      if (config.openDays.includes(today)) {
+        const unixTimestamp = Math.floor(todayAt9PM.toMillis() / 1000);
+        
+        if (now > todayAt9PM) {
+          let nextOpenDate = null;
+          
+          for (let j = 1; j < 14; j++) {
+            const checkDate = now.plus({ days: j });
+            const dayName = checkDate.toFormat('EEEE');
+            const shiftTime = checkDate.set({ hour: 21, minute: 0, second: 0, millisecond: 0 });
+            
+            if (config.openDays.includes(dayName)) {
+              nextOpenDate = shiftTime;
+              break;
+            }
+          }
+
+          if (nextOpenDate) {
+            const nextUnixTimestamp = Math.floor(nextOpenDate.toMillis() / 1000);
+            const nextDayName = nextOpenDate.toFormat('EEEE');
+            
+            return await i.reply({
+              content: `🍸 **Yes, we were open today!**\n\nBut it's past 9 PM now.\n\n**We open next on ${nextDayName}**\n<t:${nextUnixTimestamp}:F>\n<t:${nextUnixTimestamp}:R>`,
+              ephemeral: true
+            });
+          }
+        }
+        
+        return await i.reply({
+          content: `🍸 **Yes, we are open today!**\n\n**Shift starts at:**\n<t:${unixTimestamp}:F>\n<t:${unixTimestamp}:R>`,
+          ephemeral: true
+        });
+      } else {
+        let nextOpenDate = null;
+        
+        for (let j = 1; j < 14; j++) {
+          const checkDate = now.plus({ days: j });
+          const dayName = checkDate.toFormat('EEEE');
+          const shiftTime = checkDate.set({ hour: 21, minute: 0, second: 0, millisecond: 0 });
+          
+          if (config.openDays.includes(dayName)) {
+            nextOpenDate = shiftTime;
+            break;
+          }
+        }
+
+        if (!nextOpenDate) {
+          return await i.reply({
+            content: '❌ **No, we are not open today.**\n\nNo upcoming open days found in the next 2 weeks.',
+            ephemeral: true
+          });
+        }
+
+        const unixTimestamp = Math.floor(nextOpenDate.toMillis() / 1000);
+        const nextDayName = nextOpenDate.toFormat('EEEE');
+
+        return await i.reply({
+          content: `❌ **No, we are not open today.**\n\n**We open next on ${nextDayName}**\n<t:${unixTimestamp}:F>\n<t:${unixTimestamp}:R>`,
+          ephemeral: true
+        });
+      }
+    }
+
+    if (i.commandName === 'cancelevent') {
+      if (!hasEventPermission(i.member))
+        return await i.reply({ content: '❌ No permission.', ephemeral: true });
+
+      const id = i.options.getString('messageid');
+      const ev = events[id];
+      
+      if (!ev || ev.cancelled)
+        return await i.reply({ content: '⚠️ Event not found.', ephemeral: true });
+
+      ev.cancelled = true;
+      save(DATA_FILE, events);
+      clearTimeout(reminderTimers[id]);
+      clearTimeout(backupAlertTimers[id]);
+      clearTimeout(backupAlert5MinTimers[id]);
+      clearTimeout(backupAlertStartTimers[id]);
+
+      try {
+        const ch = await client.channels.fetch(ev.channelId);
+        const msg = await ch.messages.fetch(id);
+        await msg.edit({
+          embeds: [
+            new EmbedBuilder()
+              .setColor(0xff0000)
+              .setTitle(`❌ CANCELLED — ${ev.title}`)
+              .setDescription('This shift has been cancelled.')
+          ]
+        });
+      } catch (err) {
+        console.error('⚠️ Error updating cancelled event message:', err.message);
+      }
+
       return await i.reply({ content: '✅ Event cancelled.', ephemeral: true });
     }
 
-    /* EDIT EVENT TIME */
     if (i.commandName === 'editeventtime') {
       if (!hasEventPermission(i.member))
         return await i.reply({ content: '❌ No permission.', ephemeral: true });
@@ -194,7 +863,6 @@ function buildSignupList(signups) {
       return await i.reply({ content: '✅ Event time updated.', ephemeral: true });
     }
 
-    /* SET STATUS */
     if (i.commandName === 'setstatus') {
       if (!hasEventPermission(i.member))
         return await i.reply({ content: '❌ No permission.', ephemeral: true });
@@ -215,7 +883,6 @@ function buildSignupList(signups) {
       return await i.reply({ content: `✅ Status set to: ${type} ${status}`, ephemeral: true });
     }
 
-    /* CLEAR STATUS */
     if (i.commandName === 'statusclear') {
       if (!hasEventPermission(i.member))
         return await i.reply({ content: '❌ No permission.', ephemeral: true });
@@ -226,7 +893,6 @@ function buildSignupList(signups) {
       return await i.reply({ content: '✅ Status cleared, reverted to default.', ephemeral: true });
     }
 
-    /* ADD BLACKOUT */
     if (i.commandName === 'addblackout') {
       if (!hasEventPermission(i.member))
         return await i.reply({ content: '❌ No permission.', ephemeral: true });
@@ -246,7 +912,6 @@ function buildSignupList(signups) {
       return await i.reply({ content: `✅ Added blackout date: ${dateStr}`, ephemeral: true });
     }
 
-    /* REMOVE BLACKOUT */
     if (i.commandName === 'removeblackout') {
       if (!hasEventPermission(i.member))
         return await i.reply({ content: '❌ No permission.', ephemeral: true });
@@ -263,7 +928,6 @@ function buildSignupList(signups) {
       return await i.reply({ content: `✅ Removed blackout date: ${dateStr}`, ephemeral: true });
     }
 
-    /* LIST BLACKOUTS */
     if (i.commandName === 'listblackouts') {
       if (!blackoutDates.length)
         return await i.reply({ content: '📅 No blackout dates set.', ephemeral: true });
@@ -275,7 +939,6 @@ function buildSignupList(signups) {
       });
     }
 
-    /* ENABLE ROLE */
     if (i.commandName === 'enable') {
       if (!hasEventPermission(i.member))
         return await i.reply({ content: '❌ No permission.', ephemeral: true });
@@ -292,7 +955,6 @@ function buildSignupList(signups) {
       return await i.reply({ content: `✅ **${role}** role has been enabled for signups.`, ephemeral: true });
     }
 
-    /* DISABLE ROLE */
     if (i.commandName === 'disable') {
       if (!hasEventPermission(i.member))
         return await i.reply({ content: '❌ No permission.', ephemeral: true });
@@ -308,7 +970,6 @@ function buildSignupList(signups) {
       return await i.reply({ content: `✅ **${role}** role has been disabled for signups.`, ephemeral: true });
     }
 
-    /* HELP COMMAND */
     if (i.commandName === 'help') {
       const helpEmbed = new EmbedBuilder()
         .setColor(0x00b0f4)
@@ -559,686 +1220,4 @@ client.once('ready', async () => {
   setTimeout(autoPostWeeklyShifts, 5000);
 });
 
-client.login(TOKEN); `**${emoji} ${role}:** ~~Disabled~~`;
-
-    const users = signups[role] || [];
-    return `**${emoji} ${role}:**\n${
-      users.length
-        ? users.map(u => `• <@${u}>`).join('\n')
-        : '*No signups yet*'
-    }`;
-  }).join('\n\n');
-}
-
-/* ───────── DUPLICATE SHIFT CHECK ───────── */
-async function checkForDuplicateShift(channel, shiftDate) {
-  try {
-    const messages = await channel.messages.fetch({ limit: 100 });
-    const shiftDay = DateTime.fromMillis(shiftDate).setZone(TIMEZONE).toFormat('EEEE');
-    const expectedTitle = `🍸 ${shiftDay} Night Shift`;
-    
-    for (const [id, message] of messages) {
-      if (message.author.id === client.user.id && message.embeds.length > 0) {
-        const embed = message.embeds[0];
-        
-        if (embed.title === expectedTitle) {
-          const existingEvent = events[id];
-          if (existingEvent && !existingEvent.cancelled) {
-            const existingDate = DateTime.fromMillis(existingEvent.datetime).setZone(TIMEZONE).toISODate();
-            const newDate = DateTime.fromMillis(shiftDate).setZone(TIMEZONE).toISODate();
-            
-            if (existingDate === newDate) {
-              console.log(`✅ Shift for ${shiftDay} (${newDate}) already exists (Message ID: ${id})`);
-              return true;
-            }
-          }
-        }
-      }
-    }
-    
-    return false;
-  } catch (err) {
-    console.error('⚠️ Error checking for duplicate shift:', err.message);
-    return false;
-  }
-}
-
-/* ───────── AUTO POST LOGIC ───────── */
-async function autoPostWeeklyShifts() {
-  try {
-    if (!SIGNUP_CHANNEL) {
-      console.error('❌ SIGNUP_CHANNEL_ID not configured in .env');
-      return;
-    }
-
-    const channel = await client.channels.fetch(SIGNUP_CHANNEL).catch(err => {
-      console.error('❌ Cannot access signup channel. Check bot permissions and channel ID.');
-      console.error('   Channel ID:', SIGNUP_CHANNEL);
-      console.error('   Error:', err.message);
-      return null;
-    });
-    
-    if (!channel) return;
-
-    if (!channel.permissionsFor(client.user).has(['SendMessages', 'AddReactions', 'ViewChannel'])) {
-      console.error('❌ Bot missing required permissions in signup channel');
-      console.error('   Required: View Channel, Send Messages, Add Reactions');
-      return;
-    }
-
-    const now = DateTime.now().setZone(AUTO_POST_TIMEZONE);
-    const today = now.toFormat('EEEE');
-    const dateKey = now.toISODate();
-
-    if (!config.openDays.includes(today)) {
-      console.log(`⏭️ Today (${today}) is not an open day, skipping auto-post.`);
-      return;
-    }
-
-    if (autoPosted[dateKey]) {
-      console.log(`✅ Already auto-posted for ${dateKey}`);
-      return;
-    }
-
-    if (isBlackoutDate(now.toMillis())) {
-      console.log(`🚫 Today (${dateKey}) is a blackout date, skipping auto-post.`);
-      return;
-    }
-
-    const shiftTime = now.set({ 
-      hour: SHIFT_START_HOUR, 
-      minute: 0, 
-      second: 0 
-    }).setZone(TIMEZONE);
-
-    const isDuplicate = await checkForDuplicateShift(channel, shiftTime.toMillis());
-    if (isDuplicate) {
-      console.log(`⏭️ Shift for ${today} (${dateKey}) already posted, skipping duplicate.`);
-      autoPosted[dateKey] = Date.now();
-      save(AUTO_POST_FILE, autoPosted);
-      return;
-    }
-
-    const title = `🍸 ${today} Night Shift`;
-    const signups = Object.fromEntries(
-      Object.values(roleConfig).map(role => [role, []])
-    );
-
-    const embed = new EmbedBuilder()
-      .setColor(0x00b0f4)
-      .setTitle(title)
-      .setDescription(
-        `🕒 **When:** ${formatTime(shiftTime.toMillis())}\n\n${buildSignupList(signups)}`
-      )
-      .setFooter({ text: 'React to sign up!' });
-
-    const msg = await channel.send({ 
-      content: `<@&${BAR_STAFF_ROLE_ID}> New shift posted!`,
-      embeds: [embed] 
-    });
-
-    for (const emoji of Object.keys(roleConfig)) {
-      await msg.react(emoji);
-    }
-
-    events[msg.id] = {
-      id: msg.id,
-      title,
-      datetime: shiftTime.toMillis(),
-      channelId: channel.id,
-      signups,
-      cancelled: false
-    };
-
-    scheduleReminder(msg.id);
-    scheduleBackupAlert(msg.id);
-
-    save(DATA_FILE, events);
-    
-    autoPosted[dateKey] = Date.now();
-    save(AUTO_POST_FILE, autoPosted);
-
-    console.log(`✅ Auto-posted shift for ${today}, ${dateKey}`);
-  } catch (err) {
-    console.error('❌ Auto-post error:', err);
-  }
-}
-
-function scheduleAutoPost() {
-  setInterval(async () => {
-    const now = DateTime.now().setZone(AUTO_POST_TIMEZONE);
-    
-    if (now.hour === AUTO_POST_HOUR && now.minute < 10) {
-      await autoPostWeeklyShifts();
-    }
-  }, 10 * 60 * 1000);
-}
-
-/* ───────── SCHEDULING ───────── */
-function scheduleReminder(id) {
-  const ev = events[id];
-  if (!ev || ev.cancelled) return;
-
-  const delay = ev.datetime - Date.now();
-  if (delay <= 0) return;
-
-  reminderTimers[id] = setTimeout(async () => {
-    try {
-      const channel = await client.channels.fetch(ev.channelId);
-      await channel.send(`🔔 **Shift starting now!** <@&${BAR_STAFF_ROLE_ID}>`);
-      shiftLogs.push({ ...ev, timestamp: Date.now() });
-      save(SHIFT_LOG_FILE, shiftLogs);
-    } catch (err) {
-      console.error('⚠️ Reminder error:', err.message);
-    }
-  }, delay);
-}
-
-function scheduleBackupAlert(id) {
-  const ev = events[id];
-  if (!ev || ev.cancelled) return;
-
-  // Alert 2 hours before
-  const alertTime2Hours = ev.datetime - 2 * 60 * 60 * 1000;
-  const delay2Hours = alertTime2Hours - Date.now();
-  
-  if (delay2Hours > 0) {
-    backupAlertTimers[id] = setTimeout(async () => {
-      await sendBackupAlert(ev, '2 hours');
-    }, delay2Hours);
-  }
-
-  // Alert 5 minutes before
-  const alertTime5Min = ev.datetime - 5 * 60 * 1000;
-  const delay5Min = alertTime5Min - Date.now();
-  
-  if (delay5Min > 0) {
-    backupAlert5MinTimers[id] = setTimeout(async () => {
-      await sendBackupAlert(ev, '5 minutes');
-    }, delay5Min);
-  }
-
-  // Alert at start time
-  const delayStart = ev.datetime - Date.now();
-  
-  if (delayStart > 0) {
-    backupAlertStartTimers[id] = setTimeout(async () => {
-      await sendBackupAlert(ev, 'now (shift starting)');
-    }, delayStart);
-  }
-}
-
-async function sendBackupAlert(ev, timeframe) {
-  const missing = Object.values(roleConfig).filter(
-    r => !disabledRoles.includes(r) && !(ev.signups[r]?.length)
-  );
-  if (!missing.length) return;
-
-  try {
-    // Use staff chat channel for backup alerts
-    if (!STAFF_CHAT_CHANNEL) {
-      console.error('⚠️ STAFF_CHAT_CHANNEL_ID not configured in .env - backup alert not sent');
-      return;
-    }
-
-    const staffChannel = await client.channels.fetch(STAFF_CHAT_CHANNEL).catch(err => {
-      console.error('⚠️ Cannot access staff chat channel for backup alert');
-      console.error('   Channel ID:', STAFF_CHAT_CHANNEL);
-      console.error('   Error:', err.message);
-      return null;
-    });
-
-    if (!staffChannel) {
-      console.error('❌ Staff chat channel not found, backup alert not sent');
-      return;
-    }
-
-    const signupChannel = await client.channels.fetch(ev.channelId);
-    const guild = signupChannel.guild;
-    
-    // Build role mentions for each missing position
-    const roleMentions = [];
-    for (const missingRole of missing) {
-      let discordRole = null;
-      
-      // Special case for Backup Manager - ping @manager or @head manager
-      if (missingRole === 'Backup Manager') {
-        discordRole = guild.roles.cache.find(r => 
-          r.name.toLowerCase() === 'manager' || r.name.toLowerCase() === 'head manager'
-        );
-      } else {
-        // Find the Discord role that matches this position name
-        discordRole = guild.roles.cache.find(r => 
-          r.name.toLowerCase() === missingRole.toLowerCase()
-        );
-      }
-      
-      if (discordRole) {
-        roleMentions.push(`<@&${discordRole.id}>`);
-      } else {
-        // If no matching role found, just add the role name
-        roleMentions.push(`**${missingRole}**`);
-      }
-    }
-    
-    await staffChannel.send(
-      `⚠️ **BACKUP NEEDED** (${timeframe}) for ${ev.title}\nMissing positions:\n${roleMentions.join('\n')}`
-    );
-  } catch (err) {
-    console.error('⚠️ Backup alert error:', err.message);
-  }
-}
-
-/* ───────── SLASH COMMANDS ───────── */
-const commands = [
-  new SlashCommandBuilder()
-    .setName('createevent')
-    .setDescription('Create a new shift event'),
-
-  new SlashCommandBuilder()
-    .setName('mysignups')
-    .setDescription('View your upcoming signups'),
-
-  new SlashCommandBuilder()
-    .setName('nextshift')
-    .setDescription('View the next upcoming shift'),
-
-  new SlashCommandBuilder()
-    .setName('areweopen')
-    .setDescription('Check if the bar is open today'),
-
-  new SlashCommandBuilder()
-    .setName('cancelevent')
-    .setDescription('Cancel an event')
-    .addStringOption(o =>
-      o.setName('messageid').setDescription('Event message ID').setRequired(true)),
-
-  new SlashCommandBuilder()
-    .setName('editeventtime')
-    .setDescription('Edit event start time')
-    .addStringOption(o =>
-      o.setName('messageid')
-        .setDescription('Event message ID')
-        .setRequired(true))
-    .addStringOption(o =>
-      o.setName('datetime')
-        .setDescription('DD-MM-YYYY h:mm AM/PM')
-        .setRequired(true)),
-
-  new SlashCommandBuilder()
-    .setName('setstatus')
-    .setDescription('Set custom bot status')
-    .addStringOption(o =>
-      o.setName('status')
-        .setDescription('Status text')
-        .setRequired(true))
-    .addStringOption(o =>
-      o.setName('type')
-        .setDescription('Activity type')
-        .addChoices(
-          { name: 'Playing', value: 'Playing' },
-          { name: 'Watching', value: 'Watching' },
-          { name: 'Listening', value: 'Listening' },
-          { name: 'Competing', value: 'Competing' }
-        )),
-
-  new SlashCommandBuilder()
-    .setName('statusclear')
-    .setDescription('Clear custom status and return to default'),
-
-  new SlashCommandBuilder()
-    .setName('addblackout')
-    .setDescription('Add a blackout date (no shifts)')
-    .addStringOption(o =>
-      o.setName('date')
-        .setDescription('Date (YYYY-MM-DD)')
-        .setRequired(true)),
-
-  new SlashCommandBuilder()
-    .setName('removeblackout')
-    .setDescription('Remove a blackout date')
-    .addStringOption(o =>
-      o.setName('date')
-        .setDescription('Date (YYYY-MM-DD)')
-        .setRequired(true)),
-
-  new SlashCommandBuilder()
-    .setName('listblackouts')
-    .setDescription('List all blackout dates'),
-
-  new SlashCommandBuilder()
-    .setName('enable')
-    .setDescription('Enable a role for signups')
-    .addStringOption(o =>
-      o.setName('role')
-        .setDescription('Role to enable')
-        .setRequired(true)
-        .addChoices(
-          { name: 'Active Manager', value: 'Active Manager' },
-          { name: 'Backup Manager', value: 'Backup Manager' },
-          { name: 'Bouncer', value: 'Bouncer' },
-          { name: 'Bartender', value: 'Bartender' },
-          { name: 'Dancer', value: 'Dancer' },
-          { name: 'DJ', value: 'DJ' }
-        )),
-
-  new SlashCommandBuilder()
-    .setName('disable')
-    .setDescription('Disable a role for signups')
-    .addStringOption(o =>
-      o.setName('role')
-        .setDescription('Role to disable')
-        .setRequired(true)
-        .addChoices(
-          { name: 'Active Manager', value: 'Active Manager' },
-          { name: 'Backup Manager', value: 'Backup Manager' },
-          { name: 'Bouncer', value: 'Bouncer' },
-          { name: 'Bartender', value: 'Bartender' },
-          { name: 'Dancer', value: 'Dancer' },
-          { name: 'DJ', value: 'DJ' }
-        )),
-
-  new SlashCommandBuilder()
-    .setName('help')
-    .setDescription('Display all available commands')
-];
-
-const rest = new REST({ version: '10' }).setToken(TOKEN);
-
-(async () => {
-  try {
-    await rest.put(Routes.applicationCommands(CLIENT_ID), {
-      body: commands.map(c => c.toJSON())
-    });
-    console.log('✅ Slash commands registered');
-  } catch (err) {
-    console.error('❌ Error registering commands:', err);
-  }
-})();
-
-/* ───────── INTERACTIONS ───────── */
-client.on('interactionCreate', async i => {
-  try {
-    /* CREATE EVENT MODAL */
-    if (i.isChatInputCommand() && i.commandName === 'createevent') {
-      if (!hasEventPermission(i.member))
-        return await i.reply({ content: '❌ No permission.', ephemeral: true });
-
-      const modal = new ModalBuilder()
-        .setCustomId('createEventModal')
-        .setTitle('Create New Shift Event');
-
-      const titleInput = new TextInputBuilder()
-        .setCustomId('eventTitle')
-        .setLabel('Event Title')
-        .setStyle(TextInputStyle.Short)
-        .setPlaceholder('e.g., Friday Night Shift')
-        .setRequired(true)
-        .setMaxLength(100);
-
-      const dateInput = new TextInputBuilder()
-        .setCustomId('eventDate')
-        .setLabel('Date (DD-MM-YYYY)')
-        .setStyle(TextInputStyle.Short)
-        .setPlaceholder('e.g., 25-01-2026')
-        .setRequired(true)
-        .setMaxLength(10);
-
-      const timeInput = new TextInputBuilder()
-        .setCustomId('eventTime')
-        .setLabel('Time (h:mm AM/PM)')
-        .setStyle(TextInputStyle.Short)
-        .setPlaceholder('e.g., 9:00 PM')
-        .setRequired(true)
-        .setMaxLength(10);
-
-      const firstRow = new ActionRowBuilder().addComponents(titleInput);
-      const secondRow = new ActionRowBuilder().addComponents(dateInput);
-      const thirdRow = new ActionRowBuilder().addComponents(timeInput);
-
-      modal.addComponents(firstRow, secondRow, thirdRow);
-
-      await i.showModal(modal);
-      return;
-    }
-
-    /* HANDLE MODAL SUBMISSION */
-    if (i.isModalSubmit() && i.customId === 'createEventModal') {
-      const title = i.fields.getTextInputValue('eventTitle');
-      const dateStr = i.fields.getTextInputValue('eventDate');
-      const timeStr = i.fields.getTextInputValue('eventTime');
-
-      const datetimeStr = `${dateStr} ${timeStr}`;
-      const dt = DateTime.fromFormat(datetimeStr, 'dd-MM-yyyy h:mm a', { zone: TIMEZONE });
-
-      if (!dt.isValid) {
-        return await i.reply({
-          content: '❌ Invalid date/time format. Please use:\n• Date: DD-MM-YYYY (e.g., 25-01-2026)\n• Time: h:mm AM/PM (e.g., 9:00 PM)',
-          ephemeral: true
-        });
-      }
-
-      if (dt.toMillis() < Date.now()) {
-        return await i.reply({
-          content: '❌ Cannot create an event in the past.',
-          ephemeral: true
-        });
-      }
-
-      await i.deferReply({ ephemeral: true });
-
-      try {
-        const channel = await client.channels.fetch(SIGNUP_CHANNEL);
-        
-        const signups = Object.fromEntries(
-          Object.values(roleConfig).map(role => [role, []])
-        );
-
-        const embed = new EmbedBuilder()
-          .setColor(0x00b0f4)
-          .setTitle(title)
-          .setDescription(
-            `🕒 **When:** ${formatTime(dt.toMillis())}\n\n${buildSignupList(signups)}`
-          )
-          .setFooter({ text: 'React to sign up!' });
-
-        const msg = await channel.send({
-          content: `<@&${BAR_STAFF_ROLE_ID}> New shift posted!`,
-          embeds: [embed]
-        });
-
-        for (const emoji of Object.keys(roleConfig)) {
-          await msg.react(emoji);
-        }
-
-        events[msg.id] = {
-          id: msg.id,
-          title,
-          datetime: dt.toMillis(),
-          channelId: channel.id,
-          signups,
-          cancelled: false
-        };
-
-        scheduleReminder(msg.id);
-        scheduleBackupAlert(msg.id);
-        save(DATA_FILE, events);
-
-        await i.editReply({
-          content: `✅ Event created successfully!\n**${title}**\n🕒 ${formatTime(dt.toMillis())}\n📝 Message ID: ${msg.id}`
-        });
-      } catch (err) {
-        console.error('❌ Error creating event:', err);
-        await i.editReply({
-          content: '❌ Failed to create event. Check bot permissions in the signup channel.'
-        });
-      }
-      return;
-    }
-
-    // Check if it's a command interaction
-    if (!i.isChatInputCommand()) return;
-
-    /* MY SIGNUPS */
-    if (i.commandName === 'mysignups') {
-      const userId = i.user.id;
-      const results = [];
-
-      for (const ev of Object.values(events)) {
-        if (ev.cancelled || ev.datetime < Date.now()) continue;
-        for (const [role, users] of Object.entries(ev.signups)) {
-          if (users.includes(userId))
-            results.push(`• **${ev.title}** — ${role}\n  🕒 ${formatTime(ev.datetime)}`);
-        }
-      }
-
-      return await i.reply({
-        content: results.length
-          ? `📋 **Your Signups:**\n\n${results.join('\n')}`
-          : '🔭 You are not signed up for any upcoming shifts.',
-        ephemeral: true
-      });
-    }
-
-    /* NEXT SHIFT */
-    if (i.commandName === 'nextshift') {
-      const now = DateTime.now().setZone(TIMEZONE);
-      let nextOpenDate = null;
-      
-      for (let j = 0; j < 14; j++) {
-        const checkDate = now.plus({ days: j });
-        const dayName = checkDate.toFormat('EEEE');
-        const shiftTime = checkDate.set({ hour: 21, minute: 0, second: 0, millisecond: 0 });
-        
-        if (config.openDays.includes(dayName) && shiftTime > now) {
-          nextOpenDate = shiftTime;
-          break;
-        }
-      }
-
-      if (!nextOpenDate) {
-        return await i.reply({
-          content: '📅 No upcoming open days found in the next 2 weeks.',
-          ephemeral: true
-        });
-      }
-
-      const unixTimestamp = Math.floor(nextOpenDate.toMillis() / 1000);
-      const dayName = nextOpenDate.toFormat('EEEE');
-
-      const embed = new EmbedBuilder()
-        .setColor(0x00b0f4)
-        .setTitle('📅 Next Open Day')
-        .addFields(
-          { name: 'Day', value: `${dayName} Night`, inline: false },
-          { name: 'Shift Starts', value: `<t:${unixTimestamp}:F>`, inline: false },
-          { name: 'Countdown', value: `<t:${unixTimestamp}:R>`, inline: false }
-        )
-        .setFooter({ text: 'All times shown in your local timezone' });
-
-      return await i.reply({ embeds: [embed], ephemeral: true });
-    }
-
-    /* ARE WE OPEN */
-    if (i.commandName === 'areweopen') {
-      const now = DateTime.now().setZone(TIMEZONE);
-      const today = now.toFormat('EEEE');
-      const todayAt9PM = now.set({ hour: 21, minute: 0, second: 0, millisecond: 0 });
-
-      if (config.openDays.includes(today)) {
-        const unixTimestamp = Math.floor(todayAt9PM.toMillis() / 1000);
-        
-        if (now > todayAt9PM) {
-          let nextOpenDate = null;
-          
-          for (let j = 1; j < 14; j++) {
-            const checkDate = now.plus({ days: j });
-            const dayName = checkDate.toFormat('EEEE');
-            const shiftTime = checkDate.set({ hour: 21, minute: 0, second: 0, millisecond: 0 });
-            
-            if (config.openDays.includes(dayName)) {
-              nextOpenDate = shiftTime;
-              break;
-            }
-          }
-
-          if (nextOpenDate) {
-            const nextUnixTimestamp = Math.floor(nextOpenDate.toMillis() / 1000);
-            const nextDayName = nextOpenDate.toFormat('EEEE');
-            
-            return await i.reply({
-              content: `🍸 **Yes, we were open today!**\n\nBut it's past 9 PM now.\n\n**We open next on ${nextDayName}**\n<t:${nextUnixTimestamp}:F>\n<t:${nextUnixTimestamp}:R>`,
-              ephemeral: true
-            });
-          }
-        }
-        
-        return await i.reply({
-          content: `🍸 **Yes, we are open today!**\n\n**Shift starts at:**\n<t:${unixTimestamp}:F>\n<t:${unixTimestamp}:R>`,
-          ephemeral: true
-        });
-      } else {
-        let nextOpenDate = null;
-        
-        for (let j = 1; j < 14; j++) {
-          const checkDate = now.plus({ days: j });
-          const dayName = checkDate.toFormat('EEEE');
-          const shiftTime = checkDate.set({ hour: 21, minute: 0, second: 0, millisecond: 0 });
-          
-          if (config.openDays.includes(dayName)) {
-            nextOpenDate = shiftTime;
-            break;
-          }
-        }
-
-        if (!nextOpenDate) {
-          return await i.reply({
-            content: '❌ **No, we are not open today.**\n\nNo upcoming open days found in the next 2 weeks.',
-            ephemeral: true
-          });
-        }
-
-        const unixTimestamp = Math.floor(nextOpenDate.toMillis() / 1000);
-        const nextDayName = nextOpenDate.toFormat('EEEE');
-
-        return await i.reply({
-          content: `❌ **No, we are not open today.**\n\n**We open next on ${nextDayName}**\n<t:${unixTimestamp}:F>\n<t:${unixTimestamp}:R>`,
-          ephemeral: true
-        });
-      }
-    }
-
-    /* CANCEL EVENT */
-    if (i.commandName === 'cancelevent') {
-      if (!hasEventPermission(i.member))
-        return await i.reply({ content: '❌ No permission.', ephemeral: true });
-
-      const id = i.options.getString('messageid');
-      const ev = events[id];
-      
-      if (!ev || ev.cancelled)
-        return await i.reply({ content: '⚠️ Event not found.', ephemeral: true });
-
-      ev.cancelled = true;
-      save(DATA_FILE, events);
-      clearTimeout(reminderTimers[id]);
-      clearTimeout(backupAlertTimers[id]);
-      clearTimeout(backupAlert5MinTimers[id]);
-      clearTimeout(backupAlertStartTimers[id]);
-
-      try {
-        const ch = await client.channels.fetch(ev.channelId);
-        const msg = await ch.messages.fetch(id);
-        await msg.edit({
-          embeds: [
-            new EmbedBuilder()
-              .setColor(0xff0000)
-              .setTitle(`❌ CANCELLED — ${ev.title}`)
-              .setDescription('This shift has been cancelled.')
-          ]
-        });
-      } catch (err) {
-        console.error('⚠️ Error updating cancelled event message:', err.message);
-      }
-
-      return
+client.login(TOKEN);
