@@ -1,7 +1,7 @@
 /***********************
- * Retro Replay Bot Rewrite V2.3.4
+ * Retro Replay Bot Rewrite V2.3.5
  * Discord.js v14
- * Backup alerts now sent to #staff-chat
+ * Fixed: All timezone checks now use config.timezone consistently
  ***********************/
 
 process.removeAllListeners('warning');
@@ -34,7 +34,6 @@ const TOKEN = process.env.BOT_TOKEN;
 const CLIENT_ID = process.env.CLIENT_ID;
 
 const TIMEZONE = config.timezone;
-const AUTO_POST_TIMEZONE = config.autoPostTimezone;
 const AUTO_POST_HOUR = config.autoPostHour;
 const SHIFT_START_HOUR = config.shiftStartHour;
 
@@ -211,7 +210,8 @@ async function autoPostWeeklyShifts() {
       return;
     }
 
-    const now = DateTime.now().setZone(AUTO_POST_TIMEZONE);
+    // FIXED: Use TIMEZONE from config.json instead of AUTO_POST_TIMEZONE
+    const now = DateTime.now().setZone(TIMEZONE);
     const today = now.toFormat('EEEE');
     const dateKey = now.toISODate();
 
@@ -230,11 +230,12 @@ async function autoPostWeeklyShifts() {
       return;
     }
 
+    // FIXED: Shift time already uses TIMEZONE correctly
     const shiftTime = now.set({ 
       hour: SHIFT_START_HOUR, 
       minute: 0, 
       second: 0 
-    }).setZone(TIMEZONE);
+    });
 
     const isDuplicate = await checkForDuplicateShift(channel, shiftTime.toMillis());
     if (isDuplicate) {
@@ -249,11 +250,13 @@ async function autoPostWeeklyShifts() {
       Object.values(roleConfig).map(role => [role, []])
     );
 
+    const unixTimestamp = Math.floor(shiftTime.toMillis() / 1000);
+
     const embed = new EmbedBuilder()
       .setColor(0x00b0f4)
       .setTitle(title)
       .setDescription(
-        `🕒 **When:** ${formatTime(shiftTime.toMillis())}\n\n${buildSignupList(signups)}`
+        `🕒 **When:** ${formatTime(shiftTime.toMillis())}\n<t:${unixTimestamp}:F>\n<t:${unixTimestamp}:R>\n\n${buildSignupList(signups)}`
       )
       .setFooter({ text: 'React to sign up!' });
 
@@ -291,7 +294,8 @@ async function autoPostWeeklyShifts() {
 
 function scheduleAutoPost() {
   setInterval(async () => {
-    const now = DateTime.now().setZone(AUTO_POST_TIMEZONE);
+    // FIXED: Use TIMEZONE from config.json for checking current hour
+    const now = DateTime.now().setZone(TIMEZONE);
     
     if (now.hour === AUTO_POST_HOUR && now.minute < 10) {
       await autoPostWeeklyShifts();
@@ -612,11 +616,13 @@ client.on('interactionCreate', async i => {
           Object.values(roleConfig).map(role => [role, []])
         );
 
+        const unixTimestamp = Math.floor(dt.toMillis() / 1000);
+        
         const embed = new EmbedBuilder()
           .setColor(0x00b0f4)
           .setTitle(title)
           .setDescription(
-            `🕒 **When:** ${formatTime(dt.toMillis())}\n\n${buildSignupList(signups)}`
+            `🕒 **When:** ${formatTime(dt.toMillis())}\n<t:${unixTimestamp}:F>\n<t:${unixTimestamp}:R>\n\n${buildSignupList(signups)}`
           )
           .setFooter({ text: 'React to sign up!' });
 
@@ -643,7 +649,7 @@ client.on('interactionCreate', async i => {
         save(DATA_FILE, events);
 
         await i.editReply({
-          content: `✅ Event created successfully!\n**${title}**\n🕒 ${formatTime(dt.toMillis())}\n📝 Message ID: ${msg.id}`
+          content: `✅ Event created successfully!\n**${title}**\n🕒 ${formatTime(dt.toMillis())}\n📍 Message ID: ${msg.id}`
         });
       } catch (err) {
         console.error('❌ Error creating event:', err);
@@ -664,7 +670,7 @@ client.on('interactionCreate', async i => {
         if (ev.cancelled || ev.datetime < Date.now()) continue;
         for (const [role, users] of Object.entries(ev.signups)) {
           if (users.includes(userId))
-            results.push(`• **${ev.title}** — ${role}\n  🕒 ${formatTime(ev.datetime)}`);
+            results.push(`• **${ev.title}** – ${role}\n  🕒 ${formatTime(ev.datetime)}`);
         }
       }
 
@@ -806,7 +812,7 @@ client.on('interactionCreate', async i => {
           embeds: [
             new EmbedBuilder()
               .setColor(0xff0000)
-              .setTitle(`❌ CANCELLED — ${ev.title}`)
+              .setTitle(`❌ CANCELLED – ${ev.title}`)
               .setDescription('This shift has been cancelled.')
           ]
         });
@@ -846,13 +852,15 @@ client.on('interactionCreate', async i => {
         const ch = await client.channels.fetch(ev.channelId);
         const msg = await ch.messages.fetch(id);
 
+        const unixTimestamp = Math.floor(ev.datetime / 1000);
+
         await msg.edit({
           embeds: [
             new EmbedBuilder()
               .setColor(0x00b0f4)
               .setTitle(ev.title)
               .setDescription(
-                `🕒 **When:** ${formatTime(ev.datetime)}\n\n${buildSignupList(ev.signups)}`
+                `🕒 **When:** ${formatTime(ev.datetime)}\n<t:${unixTimestamp}:F>\n<t:${unixTimestamp}:R>\n\n${buildSignupList(ev.signups)}`
               )
           ]
         });
@@ -865,7 +873,7 @@ client.on('interactionCreate', async i => {
 
     if (i.commandName === 'setstatus') {
       if (!hasEventPermission(i.member))
-        return await i.reply({ content: '❌ No permission.', ephemeral: true });
+        return await i.reply({ content: '❌ You need one of the following roles to use this command: ' + config.eventCreatorRoles.join(', '), ephemeral: true });
 
       const status = i.options.getString('status');
       const type = i.options.getString('type') || 'Playing';
@@ -885,7 +893,7 @@ client.on('interactionCreate', async i => {
 
     if (i.commandName === 'statusclear') {
       if (!hasEventPermission(i.member))
-        return await i.reply({ content: '❌ No permission.', ephemeral: true });
+        return await i.reply({ content: '❌ You need one of the following roles to use this command: ' + config.eventCreatorRoles.join(', '), ephemeral: true });
 
       customStatus = null;
       setDefaultStatus();
@@ -987,21 +995,27 @@ client.on('interactionCreate', async i => {
             inline: false
           },
           {
-            name: '⚙️ Management Commands',
+            name: '⚙️ Event Management Commands',
             value: [
-              '`/createevent` - Create a new shift event',
-              '`/cancelevent` - Cancel a scheduled event',
-              '`/editeventtime` - Edit an event\'s start time',
-              '`/enable` - Enable a role for signups',
-              '`/disable` - Disable a role for signups'
+              '`/createevent` - Create a new shift event (opens modal)',
+              '`/cancelevent <messageid>` - Cancel a scheduled event',
+              '`/editeventtime <messageid> <datetime>` - Edit event start time (DD-MM-YYYY h:mm AM/PM)'
+            ].join('\n'),
+            inline: false
+          },
+          {
+            name: '👥 Role Management Commands',
+            value: [
+              '`/enable <role>` - Enable a role for signups',
+              '`/disable <role>` - Disable a role for signups'
             ].join('\n'),
             inline: false
           },
           {
             name: '🚫 Blackout Date Commands',
             value: [
-              '`/addblackout` - Add a blackout date (prevents auto-posting)',
-              '`/removeblackout` - Remove a blackout date',
+              '`/addblackout <date>` - Add a blackout date (YYYY-MM-DD format, prevents auto-posting)',
+              '`/removeblackout <date>` - Remove a blackout date (YYYY-MM-DD format)',
               '`/listblackouts` - List all blackout dates'
             ].join('\n'),
             inline: false
@@ -1009,7 +1023,7 @@ client.on('interactionCreate', async i => {
           {
             name: '🤖 Bot Status Commands',
             value: [
-              '`/setstatus` - Set a custom bot status',
+              '`/setstatus <status> [type]` - Set a custom bot status',
               '`/statusclear` - Clear custom status and revert to default'
             ].join('\n'),
             inline: false
@@ -1018,9 +1032,14 @@ client.on('interactionCreate', async i => {
             name: '📝 How to Sign Up',
             value: 'React with the appropriate emoji on shift posts:\n1️⃣ Active Manager\n2️⃣ Backup Manager\n3️⃣ Bouncer\n4️⃣ Bartender\n5️⃣ Dancer\n6️⃣ DJ',
             inline: false
+          },
+          {
+            name: '🔐 Permission Requirements',
+            value: `Management commands require one of these roles: **${config.eventCreatorRoles.join(', ')}**`,
+            inline: false
           }
         )
-        .setFooter({ text: 'Management commands require appropriate permissions' })
+        .setFooter({ text: 'Bot automatically posts shifts on configured open days at the scheduled time' })
         .setTimestamp();
 
       return await i.reply({ embeds: [helpEmbed], ephemeral: true });
@@ -1103,11 +1122,13 @@ client.on('messageReactionAdd', async (reaction, user) => {
   save(DATA_FILE, events);
 
   try {
+    const unixTimestamp = Math.floor(ev.datetime / 1000);
+    
     const embed = new EmbedBuilder()
       .setColor(0x00b0f4)
       .setTitle(ev.title)
       .setDescription(
-        `🕒 **When:** ${formatTime(ev.datetime)}\n\n${buildSignupList(ev.signups)}`
+        `🕒 **When:** ${formatTime(ev.datetime)}\n<t:${unixTimestamp}:F>\n<t:${unixTimestamp}:R>\n\n${buildSignupList(ev.signups)}`
       )
       .setFooter({ text: 'React to sign up!' });
 
@@ -1148,11 +1169,13 @@ client.on('messageReactionRemove', async (reaction, user) => {
   save(DATA_FILE, events);
 
   try {
+    const unixTimestamp = Math.floor(ev.datetime / 1000);
+    
     const embed = new EmbedBuilder()
       .setColor(0x00b0f4)
       .setTitle(ev.title)
       .setDescription(
-        `🕒 **When:** ${formatTime(ev.datetime)}\n\n${buildSignupList(ev.signups)}`
+        `🕒 **When:** ${formatTime(ev.datetime)}\n<t:${unixTimestamp}:F>\n<t:${unixTimestamp}:R>\n\n${buildSignupList(ev.signups)}`
       )
       .setFooter({ text: 'React to sign up!' });
 
