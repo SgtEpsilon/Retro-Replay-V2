@@ -873,7 +873,7 @@ client.on('interactionCreate', async i => {
 
     if (i.commandName === 'setstatus') {
       if (!hasEventPermission(i.member))
-        return await i.reply({ content: '❌ No permission.', ephemeral: true });
+        return await i.reply({ content: '❌ You need one of the following roles to use this command: ' + config.eventCreatorRoles.join(', '), ephemeral: true });
 
       const status = i.options.getString('status');
       const type = i.options.getString('type') || 'Playing';
@@ -893,7 +893,7 @@ client.on('interactionCreate', async i => {
 
     if (i.commandName === 'statusclear') {
       if (!hasEventPermission(i.member))
-        return await i.reply({ content: '❌ No permission.', ephemeral: true });
+        return await i.reply({ content: '❌ You need one of the following roles to use this command: ' + config.eventCreatorRoles.join(', '), ephemeral: true });
 
       customStatus = null;
       setDefaultStatus();
@@ -995,21 +995,27 @@ client.on('interactionCreate', async i => {
             inline: false
           },
           {
-            name: '⚙️ Management Commands',
+            name: '⚙️ Event Management Commands',
             value: [
-              '`/createevent` - Create a new shift event',
-              '`/cancelevent` - Cancel a scheduled event',
-              '`/editeventtime` - Edit an event\'s start time',
-              '`/enable` - Enable a role for signups',
-              '`/disable` - Disable a role for signups'
+              '`/createevent` - Create a new shift event (opens modal)',
+              '`/cancelevent <messageid>` - Cancel a scheduled event',
+              '`/editeventtime <messageid> <datetime>` - Edit event start time (DD-MM-YYYY h:mm AM/PM)'
+            ].join('\n'),
+            inline: false
+          },
+          {
+            name: '👥 Role Management Commands',
+            value: [
+              '`/enable <role>` - Enable a role for signups',
+              '`/disable <role>` - Disable a role for signups'
             ].join('\n'),
             inline: false
           },
           {
             name: '🚫 Blackout Date Commands',
             value: [
-              '`/addblackout` - Add a blackout date (prevents auto-posting)',
-              '`/removeblackout` - Remove a blackout date',
+              '`/addblackout <date>` - Add a blackout date (YYYY-MM-DD format, prevents auto-posting)',
+              '`/removeblackout <date>` - Remove a blackout date (YYYY-MM-DD format)',
               '`/listblackouts` - List all blackout dates'
             ].join('\n'),
             inline: false
@@ -1017,7 +1023,7 @@ client.on('interactionCreate', async i => {
           {
             name: '🤖 Bot Status Commands',
             value: [
-              '`/setstatus` - Set a custom bot status',
+              '`/setstatus <status> [type]` - Set a custom bot status',
               '`/statusclear` - Clear custom status and revert to default'
             ].join('\n'),
             inline: false
@@ -1026,9 +1032,14 @@ client.on('interactionCreate', async i => {
             name: '📝 How to Sign Up',
             value: 'React with the appropriate emoji on shift posts:\n1️⃣ Active Manager\n2️⃣ Backup Manager\n3️⃣ Bouncer\n4️⃣ Bartender\n5️⃣ Dancer\n6️⃣ DJ',
             inline: false
+          },
+          {
+            name: '🔐 Permission Requirements',
+            value: `Management commands require one of these roles: **${config.eventCreatorRoles.join(', ')}**`,
+            inline: false
           }
         )
-        .setFooter({ text: 'Management commands require appropriate permissions' })
+        .setFooter({ text: 'Bot automatically posts shifts on configured open days at the scheduled time' })
         .setTimestamp();
 
       return await i.reply({ embeds: [helpEmbed], ephemeral: true });
