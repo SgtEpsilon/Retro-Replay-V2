@@ -6,7 +6,6 @@
     "Manager"
   ],
   "timezone": "America/New_York",
-  "autoPostTimezone": "Europe/London",
   "autoPostHour": 17,
   "shiftStartHour": 21
 }
