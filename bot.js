@@ -1,7 +1,7 @@
 /***********************
- * Retro Replay Bot Rewrite V2.3.5
+ * Retro Replay Bot Rewrite V2.3.7
  * Discord.js v14
- * Fixed: All timezone checks now use config.timezone consistently
+ * /repost command - Managers can repost the latest upcoming shift (deletes old, creates new with all signups preserved)
  ***********************/
 
 process.removeAllListeners('warning');
@@ -234,8 +234,14 @@ async function autoPostWeeklyShifts() {
     const shiftTime = now.set({ 
       hour: SHIFT_START_HOUR, 
       minute: 0, 
-      second: 0 
+      second: 0,
+      millisecond: 0
     });
+
+    console.log(`📋 Creating shift for ${today}:`);
+    console.log(`   Current time: ${now.toFormat('yyyy-MM-dd HH:mm:ss z')}`);
+    console.log(`   Shift time: ${shiftTime.toFormat('yyyy-MM-dd HH:mm:ss z')}`);
+    console.log(`   Shift start hour from config: ${SHIFT_START_HOUR}`);
 
     const isDuplicate = await checkForDuplicateShift(channel, shiftTime.toMillis());
     if (isDuplicate) {
@@ -293,11 +299,22 @@ async function autoPostWeeklyShifts() {
 }
 
 function scheduleAutoPost() {
+  console.log(`⏰ Auto-post scheduler started`);
+  console.log(`   Timezone: ${TIMEZONE}`);
+  console.log(`   Auto-post hour: ${AUTO_POST_HOUR}`);
+  console.log(`   Shift start hour: ${SHIFT_START_HOUR}`);
+  console.log(`   Current time: ${DateTime.now().setZone(TIMEZONE).toFormat('yyyy-MM-dd HH:mm:ss z')}`);
+  
   setInterval(async () => {
-    // FIXED: Use TIMEZONE from config.json for checking current hour
     const now = DateTime.now().setZone(TIMEZONE);
     
+    // Debug logging
+    if (now.minute === 0) {
+      console.log(`🕐 Hourly check - Current time: ${now.toFormat('HH:mm z')} | Looking for hour: ${AUTO_POST_HOUR}`);
+    }
+    
     if (now.hour === AUTO_POST_HOUR && now.minute < 10) {
+      console.log(`✅ Auto-post hour reached! Running auto-post at ${now.toFormat('yyyy-MM-dd HH:mm:ss z')}`);
       await autoPostWeeklyShifts();
     }
   }, 10 * 60 * 1000);
@@ -530,7 +547,11 @@ const commands = [
     .setName('refresh')
     .setDescription('Refresh a shift signup embed')
     .addStringOption(o =>
-      o.setName('messageid').setDescription('Event message ID').setRequired(true))
+      o.setName('messageid').setDescription('Event message ID').setRequired(true)),
+
+  new SlashCommandBuilder()
+    .setName('repost')
+    .setDescription('Repost the latest upcoming shift event')
 ];
 
 const rest = new REST({ version: '10' }).setToken(TOKEN);
@@ -1006,7 +1027,8 @@ client.on('interactionCreate', async i => {
             value: [
               '`/createevent` - Create a new shift event (opens modal)',
               '`/cancelevent <messageid>` - Cancel a scheduled event',
-              '`/editeventtime <messageid> <datetime>` - Edit event start time (DD-MM-YYYY h:mm AM/PM)'
+              '`/editeventtime <messageid> <datetime>` - Edit event start time (DD-MM-YYYY h:mm AM/PM)',
+              '`/repost` - Repost the latest upcoming shift (deletes old post)'
             ].join('\n'),
             inline: false
           },
@@ -1086,6 +1108,98 @@ client.on('interactionCreate', async i => {
       } catch (err) {
         console.error('⚠️ Error refreshing embed:', err.message);
         await i.editReply({ content: '❌ Failed to refresh embed. Make sure the message ID is correct and the bot has access to that channel.' });
+      }
+      return;
+    }
+
+    if (i.commandName === 'repost') {
+      if (!hasEventPermission(i.member))
+        return await i.reply({ content: '❌ You need one of the following roles to use this command: ' + config.eventCreatorRoles.join(', '), ephemeral: true });
+
+      await i.deferReply({ ephemeral: true });
+
+      try {
+        // Find the latest upcoming non-cancelled event
+        const now = Date.now();
+        let latestEvent = null;
+        let latestEventId = null;
+
+        for (const [id, ev] of Object.entries(events)) {
+          if (ev.cancelled || ev.datetime < now) continue;
+          
+          if (!latestEvent || ev.datetime < latestEvent.datetime) {
+            latestEvent = ev;
+            latestEventId = id;
+          }
+        }
+
+        if (!latestEvent) {
+          return await i.editReply({ content: '⚠️ No upcoming shifts found to repost.' });
+        }
+
+        // Fetch the channel
+        const channel = await client.channels.fetch(SIGNUP_CHANNEL);
+        
+        // Create new embed with current data
+        const unixTimestamp = Math.floor(latestEvent.datetime / 1000);
+        
+        const embed = new EmbedBuilder()
+          .setColor(0x00b0f4)
+          .setTitle(latestEvent.title)
+          .setDescription(
+            `🕒 **When:** ${formatTime(latestEvent.datetime)}\n<t:${unixTimestamp}:F>\n<t:${unixTimestamp}:R>\n\n${buildSignupList(latestEvent.signups)}`
+          )
+          .setFooter({ text: 'React to sign up!' });
+
+        // Send new message
+        const newMsg = await channel.send({
+          content: `<@&${BAR_STAFF_ROLE_ID}> Shift reposted!`,
+          embeds: [embed]
+        });
+
+        // Add reactions
+        for (const emoji of Object.keys(roleConfig)) {
+          await newMsg.react(emoji);
+        }
+
+        // Update events storage with new message ID
+        events[newMsg.id] = {
+          ...latestEvent,
+          id: newMsg.id,
+          channelId: channel.id
+        };
+
+        // Remove old event reference
+        delete events[latestEventId];
+
+        // Clear old timers
+        clearTimeout(reminderTimers[latestEventId]);
+        clearTimeout(backupAlertTimers[latestEventId]);
+        clearTimeout(backupAlert5MinTimers[latestEventId]);
+        clearTimeout(backupAlertStartTimers[latestEventId]);
+
+        // Schedule new timers
+        scheduleReminder(newMsg.id);
+        scheduleBackupAlert(newMsg.id);
+
+        save(DATA_FILE, events);
+
+        // Try to delete old message
+        try {
+          const oldChannel = await client.channels.fetch(latestEvent.channelId);
+          const oldMsg = await oldChannel.messages.fetch(latestEventId);
+          await oldMsg.delete();
+        } catch (err) {
+          console.error('⚠️ Could not delete old message:', err.message);
+        }
+
+        await i.editReply({ 
+          content: `✅ Reposted shift: **${latestEvent.title}**\n🕒 ${formatTime(latestEvent.datetime)}\n📍 New Message ID: ${newMsg.id}\n🗑️ Old Message ID: ${latestEventId}` 
+        });
+
+      } catch (err) {
+        console.error('❌ Error reposting event:', err);
+        await i.editReply({ content: '❌ Failed to repost event. Check bot permissions and try again.' });
       }
       return;
     }
@@ -1233,6 +1347,12 @@ client.on('messageReactionRemove', async (reaction, user) => {
 /* ───────── READY ───────── */
 client.once('ready', async () => {
   console.log(`✅ Logged in as ${client.user.tag}`);
+  console.log(`\n⚙️  Configuration:`);
+  console.log(`   Timezone: ${TIMEZONE}`);
+  console.log(`   Auto-post hour: ${AUTO_POST_HOUR} (${AUTO_POST_HOUR}:00 ${TIMEZONE})`);
+  console.log(`   Shift start hour: ${SHIFT_START_HOUR} (${SHIFT_START_HOUR}:00 ${TIMEZONE})`);
+  console.log(`   Current server time: ${DateTime.now().setZone(TIMEZONE).toFormat('yyyy-MM-dd HH:mm:ss z')}`);
+  console.log(`   Open days: ${config.openDays.join(', ')}\n`);
   
   if (SIGNUP_CHANNEL) {
     try {
@@ -1285,7 +1405,15 @@ client.once('ready', async () => {
 
   scheduleAutoPost();
   
-  setTimeout(autoPostWeeklyShifts, 5000);
+  // Initial check 5 seconds after startup
+  setTimeout(() => {
+    const now = DateTime.now().setZone(TIMEZONE);
+    console.log(`\n🔍 Initial auto-post check at startup:`);
+    console.log(`   Current time: ${now.toFormat('yyyy-MM-dd HH:mm:ss z')}`);
+    console.log(`   Current hour: ${now.hour} | Target hour: ${AUTO_POST_HOUR}`);
+    console.log(`   Will run: ${now.hour === AUTO_POST_HOUR && now.minute < 10 ? 'YES' : 'NO'}\n`);
+    autoPostWeeklyShifts();
+  }, 5000);
 });
 
 client.login(TOKEN);

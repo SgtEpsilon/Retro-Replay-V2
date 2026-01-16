@@ -1,4 +1,4 @@
-# 🎉 Retro Replay Bot Rewrite V2.3.6
+# 🎉 Retro Replay Bot Rewrite V2.3.7
 
 A comprehensive **Discord.js v14** bot designed for managing bar/club staff scheduling with **emoji-based signups**, **automated shift posting**, **multi-stage backup alerts**, **role management**, and **detailed shift logging**.
 
@@ -523,7 +523,17 @@ Use cases:
 
 ## 📄 Version History
 
-**V2.3.6** (Current)
+**V2.3.7 (Current)
+***NEW:*** `/repost` command - Managers can repost the latest upcoming shift (deletes old, creates new with all signups preserved)
+- Enhanced debug logging for auto-post system:
+	- Logs timezone, config values, and current time at startup
+	- Hourly checks showing what time bot is looking for
+	- Detailed logging when creating shifts
+	- Initial startup check diagnostics
+- Better permission messages - Status commands now show which roles are required
+- Version header updated to V2.3.7
+
+**V2.3.6**
 - **NEW:** `/refresh` command - Manually refresh shift signup embeds (available to all users)
 - Allows anyone to fix embed display issues without manager intervention
 - Refreshes timestamps and signup lists on demand
