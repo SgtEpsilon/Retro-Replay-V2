@@ -524,7 +524,13 @@ const commands = [
 
   new SlashCommandBuilder()
     .setName('help')
-    .setDescription('Display all available commands')
+    .setDescription('Display all available commands'),
+
+  new SlashCommandBuilder()
+    .setName('refresh')
+    .setDescription('Refresh a shift signup embed')
+    .addStringOption(o =>
+      o.setName('messageid').setDescription('Event message ID').setRequired(true))
 ];
 
 const rest = new REST({ version: '10' }).setToken(TOKEN);
@@ -990,6 +996,7 @@ client.on('interactionCreate', async i => {
               '`/mysignups` - View your upcoming shift signups',
               '`/nextshift` - View the next upcoming shift',
               '`/areweopen` - Check if the bar is open today',
+              '`/refresh <messageid>` - Refresh a shift signup embed',
               '`/help` - Display this help message'
             ].join('\n'),
             inline: false
@@ -1043,6 +1050,44 @@ client.on('interactionCreate', async i => {
         .setTimestamp();
 
       return await i.reply({ embeds: [helpEmbed], ephemeral: true });
+    }
+
+    if (i.commandName === 'refresh') {
+      const id = i.options.getString('messageid');
+      const ev = events[id];
+      
+      if (!ev) {
+        return await i.reply({ content: '⚠️ Event not found. Make sure the message ID is correct.', ephemeral: true });
+      }
+
+      if (ev.cancelled) {
+        return await i.reply({ content: '⚠️ Cannot refresh a cancelled event.', ephemeral: true });
+      }
+
+      await i.deferReply({ ephemeral: true });
+
+      try {
+        const channel = await client.channels.fetch(ev.channelId);
+        const msg = await channel.messages.fetch(id);
+
+        const unixTimestamp = Math.floor(ev.datetime / 1000);
+
+        const embed = new EmbedBuilder()
+          .setColor(0x00b0f4)
+          .setTitle(ev.title)
+          .setDescription(
+            `🕒 **When:** ${formatTime(ev.datetime)}\n<t:${unixTimestamp}:F>\n<t:${unixTimestamp}:R>\n\n${buildSignupList(ev.signups)}`
+          )
+          .setFooter({ text: 'React to sign up!' });
+
+        await msg.edit({ embeds: [embed] });
+
+        await i.editReply({ content: '✅ Shift signup embed refreshed successfully!' });
+      } catch (err) {
+        console.error('⚠️ Error refreshing embed:', err.message);
+        await i.editReply({ content: '❌ Failed to refresh embed. Make sure the message ID is correct and the bot has access to that channel.' });
+      }
+      return;
     }
 
   } catch (err) {
