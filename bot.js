@@ -1,8 +1,10 @@
 /***********************
- * Retro Replay Bot Rewrite V2.3.7
+ * Retro Replay Bot Rewrite V2.3.7.1
  * Discord.js v14
- * /repost command - Managers can repost the latest upcoming shift (deletes old, creates new with all signups preserved)
+ * Fixed: Startup auto-post now checks configured hour
+ * Fixed: Manager role pings for Active/Backup Manager positions
  ***********************/
+
 process.removeAllListeners('warning');
 process.env.NODE_NO_WARNINGS = '1';
 
@@ -404,20 +406,28 @@ async function sendBackupAlert(ev, timeframe) {
     for (const missingRole of missing) {
       let discordRole = null;
       
-      if (missingRole === 'Backup Manager') {
-        discordRole = guild.roles.cache.find(r => 
-          r.name.toLowerCase() === 'manager' || r.name.toLowerCase() === 'head manager'
-        );
+      if (missingRole === 'Backup Manager' || missingRole === 'Active Manager') {
+        // For both manager roles, ping Head Manager and Manager
+        const headManager = guild.roles.cache.find(r => r.name.toLowerCase() === 'head manager');
+        const manager = guild.roles.cache.find(r => r.name.toLowerCase() === 'manager');
+        
+        if (headManager) roleMentions.push(`<@&${headManager.id}>`);
+        if (manager) roleMentions.push(`<@&${manager.id}>`);
+        
+        // If neither found, show the role name
+        if (!headManager && !manager) {
+          roleMentions.push(`**${missingRole}**`);
+        }
       } else {
         discordRole = guild.roles.cache.find(r => 
           r.name.toLowerCase() === missingRole.toLowerCase()
         );
-      }
-      
-      if (discordRole) {
-        roleMentions.push(`<@&${discordRole.id}>`);
-      } else {
-        roleMentions.push(`**${missingRole}**`);
+        
+        if (discordRole) {
+          roleMentions.push(`<@&${discordRole.id}>`);
+        } else {
+          roleMentions.push(`**${missingRole}**`);
+        }
       }
     }
     

@@ -1,4 +1,4 @@
-# 🎉 Retro Replay Bot Rewrite V2.3.7
+# 🎉 Retro Replay Bot Rewrite V2.3.7.1
 
 A comprehensive **Discord.js v14** bot designed for managing bar/club staff scheduling with **emoji-based signups**, **automated shift posting**, **multi-stage backup alerts**, **role management**, and **detailed shift logging**.
 
@@ -10,6 +10,7 @@ Perfect for RP servers, virtual clubs, bars, and any staff-driven community that
 
 ### 🤖 Automated Shift Management
 - **Daily auto-posting** at configured hour in your timezone on configured open days
+- **Smart restart handling** - Won't post shifts on restart unless within configured hour window
 - Shifts automatically scheduled for configured start hour
 - **Duplicate shift prevention** - Scans last 100 messages to prevent duplicate posts
 - Smart blackout date system to skip closed days
@@ -18,15 +19,18 @@ Perfect for RP servers, virtual clubs, bars, and any staff-driven community that
   - 2 hours before shift
   - 5 minutes before shift
   - At shift start time
+- **Intelligent manager pings** - Both Active Manager and Backup Manager positions ping @Head Manager and @Manager
 - Backup alerts exclude disabled roles
 - One shift per day - prevents duplicate postings
 - **Unified timezone configuration** - All times use single timezone setting
+- **Enhanced debug logging** - Detailed startup diagnostics and hourly checks
 
 ### 📅 Event System
 - Emoji-based role signups (react to join, unreact to leave)
 - Live-updating embeds showing current staff roster
 - **Discord dynamic timestamps** - Shows time in each user's local timezone with live countdown
 - **Manual refresh command** - Anyone can refresh shift embeds to fix display issues
+- **Shift reposting** - Managers can repost latest shift to bump it to top of channel
 - **One role per user** - selecting new role removes old signup
 - Automatic reaction cleanup for disabled roles
 - Date/time format: **DD-MM-YYYY 12HR** (e.g., 15-01-2026 9:00 PM)
@@ -80,11 +84,14 @@ Perfect for RP servers, virtual clubs, bars, and any staff-driven community that
 
 ### ⚙️ Manager Commands (Restricted)
 
+### ⚙️ Manager Commands (Restricted)
+
 | Command | Description |
 |---------|-------------|
 | `/createevent` | Create a new shift event using modal form |
 | `/cancelevent <messageid>` | Cancel a shift event (marks as cancelled, updates embed) |
 | `/editeventtime <messageid> <datetime>` | Edit shift start time (format: DD-MM-YYYY h:mm AM/PM) |
+| `/repost` | Repost the latest upcoming shift (deletes old, creates new with signups preserved) |
 | `/enable <role>` | Enable a disabled role for signups (dropdown selection) |
 | `/disable <role>` | Disable a role from signups (dropdown selection) |
 | `/addblackout <date>` | Block a date from auto-posting (format: YYYY-MM-DD) |
@@ -234,15 +241,17 @@ BAR_STAFF_ROLE_ID=role_id_to_ping_for_shifts
 
 ### Automated Shift Posting
 1. Bot checks every 10 minutes if current hour matches `autoPostHour` in configured timezone
-2. **Scans last 100 messages** to check if shift already exists (prevents duplicates)
-3. If today matches an "open day" in config AND is not blacked out AND no duplicate exists:
+2. **Startup check** - On bot restart, only posts if within configured hour window (prevents unexpected posts)
+3. **Scans last 100 messages** to check if shift already exists (prevents duplicates)
+4. If today matches an "open day" in config AND is not blacked out AND no duplicate exists:
    - Creates shift event for configured `shiftStartHour` tonight
    - Posts to configured signup channel
    - Adds reaction emojis automatically
    - Pings bar staff role
    - Shows Discord dynamic timestamps (displays in each user's local timezone)
-4. Tracks posting by date to prevent duplicates
-5. Disabled roles show as `~~Disabled~~` in embed
+5. Tracks posting by date to prevent duplicates
+6. Disabled roles show as `~~Disabled~~` in embed
+7. **Debug logging** shows timezone, config values, and posting decisions
 
 ### Signup System
 1. Users react with 1️⃣-6️⃣ to sign up for roles
@@ -266,15 +275,17 @@ The bot sends backup alerts at **three different times** to #staff-chat:
 - Sent to dedicated #staff-chat channel (not signup channel)
 - Includes shift title and timeframe in message
 - Pings relevant Discord roles (e.g., @Bartender, @Bouncer)
-- Special handling for Backup Manager (pings @Manager or @Head Manager)
+- **Intelligent manager pinging**: Both Active Manager and Backup Manager positions ping @Head Manager AND @Manager (not just one)
+- Gracefully handles missing Discord roles
 
 **Example Alert:**
 ```
 ⚠️ BACKUP NEEDED (5 minutes) for Friday Night Shift
 Missing positions:
+@Head Manager
+@Manager
 @Bartender
 @Bouncer
-**DJ**
 ```
 
 ### Reminder Flow
@@ -413,6 +424,22 @@ Use cases:
 • General display problems
 ```
 
+### Reposting a Shift
+```
+/repost
+→ Finds the latest upcoming shift
+→ Creates a new post with all current signups
+→ Deletes the old shift message
+→ Pings @Bar Staff role again
+→ Requires manager permissions
+
+Use cases:
+• Shift message buried in chat
+• Want to bump shift to top of channel
+• Need fresh notification to staff
+• Old message had persistent issues
+```
+
 ### Managing Blackouts
 ```
 /listblackouts
@@ -444,6 +471,9 @@ Use cases:
 - **Staff chat required:** Must configure STAFF_CHAT_CHANNEL_ID for backup alerts to work
 - **Permission messages:** Error messages now show exactly which roles are required
 - **Manual refresh:** Anyone can use `/refresh` to fix embed display issues
+- **Shift reposting:** Managers can use `/repost` to bump shifts to top of channel
+- **Smart restart:** Bot won't auto-post on restart unless within configured hour window
+- **Debug logging:** Comprehensive diagnostics for timezone and auto-posting behavior
 
 ---
 
@@ -457,6 +487,8 @@ Use cases:
 - Check that `timezone` is correctly set in config.json
 - Check console logs for "Auto-posted" or skip messages
 - Look for "already exists" messages indicating duplicate prevention
+- **Check startup logs** - bot logs timezone, config values, and current time on startup
+- **Restart during wrong hour** - bot won't post if restarted outside configured hour window
 
 **Backup alerts not being sent**
 - Verify `STAFF_CHAT_CHANNEL_ID` is set in `.env` file
@@ -464,6 +496,7 @@ Use cases:
 - Check console logs for staff chat access verification on startup
 - Alerts only trigger for enabled roles with no signups
 - Bot logs "backup alert not sent" if channel is misconfigured
+- **Manager pings**: Active Manager and Backup Manager both ping @Head Manager and @Manager
 
 **Reactions aren't working**
 - Verify bot has "Add Reactions" and "Manage Messages" permissions
@@ -519,19 +552,28 @@ Use cases:
 - Check bot has "Manage Messages" permission
 - Verify bot isn't rate-limited (too many edits at once)
 
+**Shift posted at wrong time**
+- Check console logs at bot startup for timezone configuration
+- Verify `timezone`, `autoPostHour`, and `shiftStartHour` in config.json
+- Look for hourly check logs showing what time bot is looking for
+- Check if bot was restarted - it only posts on restart if within configured hour
+- Ensure server/container timezone doesn't conflict with bot timezone setting
+
 ---
 
 ## 📄 Version History
 
-**V2.3.7 (Current)
-***NEW:*** `/repost` command - Managers can repost the latest upcoming shift (deletes old, creates new with all signups preserved)
-- Enhanced debug logging for auto-post system:
-	- Logs timezone, config values, and current time at startup
-	- Hourly checks showing what time bot is looking for
-	- Detailed logging when creating shifts
-	- Initial startup check diagnostics
-- Better permission messages - Status commands now show which roles are required
-- Version header updated to V2.3.7
+**V2.3.7.1** (Current)
+- **BUGFIX:** Startup auto-post now checks configured hour before posting
+- **BUGFIX:** Manager role pings fixed - Active Manager and Backup Manager now both ping @Head Manager AND @Manager
+- **NEW:** `/repost` command - Repost latest upcoming shift (deletes old, creates new with preserved signups)
+- **NEW:** Enhanced debug logging system:
+  - Logs timezone, config values, and current server time at startup
+  - Hourly diagnostic checks showing target vs current time
+  - Detailed shift creation logging with timestamps
+  - Startup auto-post decision logging
+- Prevents unexpected shift posts when bot restarts outside configured hour window
+- Improved backup alert role mention logic for manager positions
 
 **V2.3.6**
 - **NEW:** `/refresh` command - Manually refresh shift signup embeds (available to all users)
@@ -616,4 +658,4 @@ For support, questions, or feature requests, please open an issue on GitHub or c
 
 ---
 
-**Retro Replay Bot Rewrite V2.3.6** - Making shift management effortless 🎉
+**Retro Replay Bot Rewrite V2.3.7.1** - Making shift management effortless 🎉
