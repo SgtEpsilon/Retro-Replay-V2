@@ -1,6 +1,7 @@
 /***********************
- * Retro Replay Bot Rewrite V2.3.0
+ * Retro Replay Bot Rewrite V2.3.1
  * Discord.js v14
+ * Updated with /enable, /disable, /help commands and duplicate shift checking
  ***********************/
 
 process.removeAllListeners('warning');
@@ -151,6 +152,47 @@ function buildSignupList(signups) {
   }).join('\n\n');
 }
 
+/* ───────── DUPLICATE SHIFT CHECK ───────── */
+async function checkForDuplicateShift(channel, shiftDate) {
+  try {
+    // Fetch recent messages (up to 100)
+    const messages = await channel.messages.fetch({ limit: 100 });
+    
+    // Get the day name for the shift we're trying to post
+    const shiftDay = DateTime.fromMillis(shiftDate).setZone(TIMEZONE).toFormat('EEEE');
+    const expectedTitle = `🍸 ${shiftDay} Night Shift`;
+    
+    // Check if any recent messages match our shift
+    for (const [id, message] of messages) {
+      // Check if this message is a shift signup (has embeds and is from our bot)
+      if (message.author.id === client.user.id && message.embeds.length > 0) {
+        const embed = message.embeds[0];
+        
+        // Check if the title matches our expected shift title
+        if (embed.title === expectedTitle) {
+          // Check if this event is in our events object and not cancelled
+          const existingEvent = events[id];
+          if (existingEvent && !existingEvent.cancelled) {
+            // Check if the dates match (same day)
+            const existingDate = DateTime.fromMillis(existingEvent.datetime).setZone(TIMEZONE).toISODate();
+            const newDate = DateTime.fromMillis(shiftDate).setZone(TIMEZONE).toISODate();
+            
+            if (existingDate === newDate) {
+              console.log(`✅ Shift for ${shiftDay} (${newDate}) already exists (Message ID: ${id})`);
+              return true; // Duplicate found
+            }
+          }
+        }
+      }
+    }
+    
+    return false; // No duplicate found
+  } catch (err) {
+    console.error('⚠️ Error checking for duplicate shift:', err.message);
+    return false; // On error, allow posting (fail-safe)
+  }
+}
+
 /* ───────── AUTO POST LOGIC ───────── */
 async function autoPostWeeklyShifts() {
   try {
@@ -183,7 +225,7 @@ async function autoPostWeeklyShifts() {
     const dateKey = now.toISODate();
 
     if (!config.openDays.includes(today)) {
-      console.log(`⭐️ Today (${today}) is not an open day, skipping auto-post.`);
+      console.log(`⏭️ Today (${today}) is not an open day, skipping auto-post.`);
       return;
     }
 
@@ -202,6 +244,16 @@ async function autoPostWeeklyShifts() {
       minute: 0, 
       second: 0 
     }).setZone(TIMEZONE);
+
+    // Check for duplicate shift before posting
+    const isDuplicate = await checkForDuplicateShift(channel, shiftTime.toMillis());
+    if (isDuplicate) {
+      console.log(`⏭️ Shift for ${today} (${dateKey}) already posted, skipping duplicate.`);
+      // Mark as posted to prevent future attempts
+      autoPosted[dateKey] = Date.now();
+      save(AUTO_POST_FILE, autoPosted);
+      return;
+    }
 
     const title = `🍸 ${today} Night Shift`;
     const signups = Object.fromEntries(
@@ -374,7 +426,43 @@ const commands = [
 
   new SlashCommandBuilder()
     .setName('listblackouts')
-    .setDescription('List all blackout dates')
+    .setDescription('List all blackout dates'),
+
+  new SlashCommandBuilder()
+    .setName('enable')
+    .setDescription('Enable a role for signups')
+    .addStringOption(o =>
+      o.setName('role')
+        .setDescription('Role to enable')
+        .setRequired(true)
+        .addChoices(
+          { name: 'Active Manager', value: 'Active Manager' },
+          { name: 'Backup Manager', value: 'Backup Manager' },
+          { name: 'Bouncer', value: 'Bouncer' },
+          { name: 'Bartender', value: 'Bartender' },
+          { name: 'Dancer', value: 'Dancer' },
+          { name: 'DJ', value: 'DJ' }
+        )),
+
+  new SlashCommandBuilder()
+    .setName('disable')
+    .setDescription('Disable a role for signups')
+    .addStringOption(o =>
+      o.setName('role')
+        .setDescription('Role to disable')
+        .setRequired(true)
+        .addChoices(
+          { name: 'Active Manager', value: 'Active Manager' },
+          { name: 'Backup Manager', value: 'Backup Manager' },
+          { name: 'Bouncer', value: 'Bouncer' },
+          { name: 'Bartender', value: 'Bartender' },
+          { name: 'Dancer', value: 'Dancer' },
+          { name: 'DJ', value: 'DJ' }
+        )),
+
+  new SlashCommandBuilder()
+    .setName('help')
+    .setDescription('Display all available commands')
 ];
 
 const rest = new REST({ version: '10' }).setToken(TOKEN);
@@ -424,8 +512,8 @@ client.on('interactionCreate', async i => {
       let nextOpenDate = null;
       
       // Check up to 14 days ahead to find the next open day
-      for (let i = 0; i < 14; i++) {
-        const checkDate = now.plus({ days: i });
+      for (let j = 0; j < 14; j++) {
+        const checkDate = now.plus({ days: j });
         const dayName = checkDate.toFormat('EEEE');
         
         // Set to 9 PM (21:00) for this day
@@ -476,8 +564,8 @@ client.on('interactionCreate', async i => {
           // 9 PM has passed, show next open day instead
           let nextOpenDate = null;
           
-          for (let i = 1; i < 14; i++) {
-            const checkDate = now.plus({ days: i });
+          for (let j = 1; j < 14; j++) {
+            const checkDate = now.plus({ days: j });
             const dayName = checkDate.toFormat('EEEE');
             const shiftTime = checkDate.set({ hour: 21, minute: 0, second: 0, millisecond: 0 });
             
@@ -506,8 +594,8 @@ client.on('interactionCreate', async i => {
         // Today is not an open day, find next open day
         let nextOpenDate = null;
         
-        for (let i = 1; i < 14; i++) {
-          const checkDate = now.plus({ days: i });
+        for (let j = 1; j < 14; j++) {
+          const checkDate = now.plus({ days: j });
           const dayName = checkDate.toFormat('EEEE');
           const shiftTime = checkDate.set({ hour: 21, minute: 0, second: 0, millisecond: 0 });
           
@@ -692,6 +780,95 @@ client.on('interactionCreate', async i => {
         content: `📅 **Blackout Dates:**\n${sorted.map(d => `• ${d}`).join('\n')}`,
         ephemeral: true
       });
+    }
+
+    /* ENABLE ROLE */
+    if (i.commandName === 'enable') {
+      if (!hasEventPermission(i.member))
+        return await i.reply({ content: '❌ No permission.', ephemeral: true });
+
+      const role = i.options.getString('role');
+      const idx = disabledRoles.indexOf(role);
+
+      if (idx === -1)
+        return await i.reply({ content: `⚠️ **${role}** is already enabled.`, ephemeral: true });
+
+      disabledRoles.splice(idx, 1);
+      save(DISABLED_ROLES_FILE, disabledRoles);
+
+      return await i.reply({ content: `✅ **${role}** role has been enabled for signups.`, ephemeral: true });
+    }
+
+    /* DISABLE ROLE */
+    if (i.commandName === 'disable') {
+      if (!hasEventPermission(i.member))
+        return await i.reply({ content: '❌ No permission.', ephemeral: true });
+
+      const role = i.options.getString('role');
+
+      if (disabledRoles.includes(role))
+        return await i.reply({ content: `⚠️ **${role}** is already disabled.`, ephemeral: true });
+
+      disabledRoles.push(role);
+      save(DISABLED_ROLES_FILE, disabledRoles);
+
+      return await i.reply({ content: `✅ **${role}** role has been disabled for signups.`, ephemeral: true });
+    }
+
+    /* HELP COMMAND */
+    if (i.commandName === 'help') {
+      const helpEmbed = new EmbedBuilder()
+        .setColor(0x00b0f4)
+        .setTitle('🍸 Retro Replay Bot - Command List')
+        .setDescription('Here are all available commands:')
+        .addFields(
+          {
+            name: '📋 User Commands',
+            value: [
+              '`/mysignups` - View your upcoming shift signups',
+              '`/nextshift` - View the next upcoming shift',
+              '`/areweopen` - Check if the bar is open today',
+              '`/help` - Display this help message'
+            ].join('\n'),
+            inline: false
+          },
+          {
+            name: '⚙️ Management Commands',
+            value: [
+              '`/cancelevent` - Cancel a scheduled event',
+              '`/editeventtime` - Edit an event\'s start time',
+              '`/enable` - Enable a role for signups',
+              '`/disable` - Disable a role for signups'
+            ].join('\n'),
+            inline: false
+          },
+          {
+            name: '🚫 Blackout Date Commands',
+            value: [
+              '`/addblackout` - Add a blackout date (prevents auto-posting)',
+              '`/removeblackout` - Remove a blackout date',
+              '`/listblackouts` - List all blackout dates'
+            ].join('\n'),
+            inline: false
+          },
+          {
+            name: '🤖 Bot Status Commands',
+            value: [
+              '`/setstatus` - Set a custom bot status',
+              '`/statusclear` - Clear custom status and revert to default'
+            ].join('\n'),
+            inline: false
+          },
+          {
+            name: '📝 How to Sign Up',
+            value: 'React with the appropriate emoji on shift posts:\n1️⃣ Active Manager\n2️⃣ Backup Manager\n3️⃣ Bouncer\n4️⃣ Bartender\n5️⃣ Dancer\n6️⃣ DJ',
+            inline: false
+          }
+        )
+        .setFooter({ text: 'Management commands require appropriate permissions' })
+        .setTimestamp();
+
+      return await i.reply({ embeds: [helpEmbed], ephemeral: true });
     }
 
   } catch (err) {

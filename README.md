@@ -1,4 +1,4 @@
-# 🎉 Retro Replay Bot Rewrite V2.3.0
+# 🎉 Retro Replay Bot Rewrite V2.3.1
 
 A comprehensive **Discord.js v14** bot designed for managing bar/club staff scheduling with **emoji-based signups**, **automated shift posting**, **backup alerts**, **role management**, and **detailed shift logging**.
 
@@ -11,6 +11,7 @@ Perfect for RP servers, virtual clubs, bars, and any staff-driven community that
 ### 🤖 Automated Shift Management
 - **Daily auto-posting** at 5 PM London time on configured open days
 - Shifts automatically scheduled for 9 PM EST
+- **Duplicate shift prevention** - Scans last 100 messages to prevent duplicate posts
 - Smart blackout date system to skip closed days
 - Automatic shift reminders when events start
 - Backup alerts 2 hours before understaffed shifts (excludes disabled roles)
@@ -24,8 +25,8 @@ Perfect for RP servers, virtual clubs, bars, and any staff-driven community that
 - Date/time format: **DD-MM-YYYY 12HR** (e.g., 15-01-2026 9:00 PM)
 
 ### 🎛️ Role Management
-- Globally disable specific roles from signups
-- Re-enable previously disabled roles
+- `/disable` - Globally disable specific roles from signups via dropdown menu
+- `/enable` - Re-enable previously disabled roles via dropdown menu
 - Disabled roles persist across all events and bot restarts
 - Existing signups preserved when roles are disabled
 - New signups blocked for disabled roles with DM notification
@@ -38,7 +39,7 @@ Perfect for RP servers, virtual clubs, bars, and any staff-driven community that
 - Custom status persists until manually cleared
 
 ### 🗓️ Blackout Date System
-- `/addblackout` - Block specific dates from auto-posting (DD-MM-YYYY format)
+- `/addblackout` - Block specific dates from auto-posting (YYYY-MM-DD format)
 - `/removeblackout` - Unblock dates and resume normal scheduling
 - `/listblackouts` - View all currently blocked dates
 - Bot skips blackout dates when posting shifts
@@ -48,7 +49,7 @@ Perfect for RP servers, virtual clubs, bars, and any staff-driven community that
 - Historical records stored in `shift_logs.json`
 - Track all completed shifts with full signup details
 
-### 🔒 Permission System
+### 🔐 Permission System
 - Role-based access control for management commands
 - Configurable manager roles in `config.json`
 - Commands require roles: Owner, Head Manager, or Manager
@@ -62,6 +63,9 @@ Perfect for RP servers, virtual clubs, bars, and any staff-driven community that
 | Command | Description |
 |---------|-------------|
 | `/mysignups` | View all your upcoming shift signups |
+| `/nextshift` | View the next upcoming shift with countdown |
+| `/areweopen` | Check if the bar is open today |
+| `/help` | Display comprehensive command list and signup guide |
 
 ### ⚙️ Manager Commands (Restricted)
 
@@ -69,6 +73,8 @@ Perfect for RP servers, virtual clubs, bars, and any staff-driven community that
 |---------|-------------|
 | `/cancelevent [messageid]` | Cancel a shift event (marks as cancelled, updates embed) |
 | `/editeventtime [messageid] [datetime]` | Edit shift start time (format: DD-MM-YYYY h:mm AM/PM) |
+| `/enable [role]` | Enable a disabled role for signups (dropdown selection) |
+| `/disable [role]` | Disable a role from signups (dropdown selection) |
 | `/addblackout [date]` | Block a date from auto-posting (format: YYYY-MM-DD) |
 | `/removeblackout [date]` | Unblock a previously blackout date |
 | `/listblackouts` | View all currently blocked dates |
@@ -206,13 +212,14 @@ BAR_STAFF_ROLE_ID=role_id_to_ping_for_shifts
 
 ### Automated Shift Posting
 1. Bot checks every 10 minutes if it's 5 PM London time
-2. If today matches an "open day" in config AND is not blacked out:
+2. **Scans last 100 messages** to check if shift already exists (prevents duplicates)
+3. If today matches an "open day" in config AND is not blacked out AND no duplicate exists:
    - Creates shift event for 9 PM EST tonight
    - Posts to configured signup channel
    - Adds reaction emojis automatically
    - Pings bar staff role
-3. Tracks posting by date to prevent duplicates
-4. Disabled roles show as `~~Disabled~~` in embed
+4. Tracks posting by date to prevent duplicates
+5. Disabled roles show as `~~Disabled~~` in embed
 
 ### Signup System
 1. Users react with 1️⃣-6️⃣ to sign up for roles
@@ -232,6 +239,12 @@ BAR_STAFF_ROLE_ID=role_id_to_ping_for_shifts
 - Bot skips blackout dates during daily auto-post checks
 - Use `/removeblackout` to re-enable posting on that date
 - Use `/listblackouts` to see all blocked dates
+
+### Role Management
+- Use `/disable` with dropdown menu to select role to disable
+- Use `/enable` with dropdown menu to select role to enable
+- Changes apply globally to all shifts immediately
+- Disabled status persists in `disabled_roles.json`
 
 ### Event Management
 - `/cancelevent` - Marks event as cancelled, updates embed to red
@@ -255,6 +268,18 @@ The bot creates and manages several JSON files:
 ---
 
 ## 🎯 Usage Examples
+
+### Managing Roles
+```
+/disable role:Dancer
+→ Dancer role disabled globally
+→ Existing signups preserved
+→ New signup attempts auto-removed with DM
+
+/enable role:Dancer
+→ Dancer role re-enabled for signups
+→ Users can now sign up again
+```
 
 ### Blocking a Holiday
 ```
@@ -284,6 +309,28 @@ The bot creates and manages several JSON files:
 → Lists all your upcoming shifts with roles and times
 ```
 
+### Checking Next Shift
+```
+/nextshift
+→ Shows next scheduled open day with countdown timer
+→ Displays shift start time in your local timezone
+```
+
+### Checking if Bar is Open
+```
+/areweopen
+→ Shows if bar is open today
+→ If not, displays next open day with countdown
+```
+
+### Getting Help
+```
+/help
+→ Displays comprehensive command list
+→ Shows all role emojis and descriptions
+→ Organized by command categories
+```
+
 ### Managing Blackouts
 ```
 /listblackouts
@@ -309,6 +356,7 @@ The bot creates and manages several JSON files:
 - **One role per shift:** Users can only hold one role per event
 - **Message Content Intent:** Required for reaction handling
 - **Token security:** Never share your bot token - regenerate if exposed
+- **Duplicate prevention:** Bot scans last 100 messages to prevent duplicate shift posts
 
 ---
 
@@ -320,12 +368,13 @@ The bot creates and manages several JSON files:
 - Ensure bot has permission to post in signup channel
 - Verify bot is running during the 5 PM London time window
 - Check console logs for "Auto-posted" or skip messages
+- Look for "already exists" messages indicating duplicate prevention
 
 **Reactions aren't working**
 - Verify bot has "Add Reactions" and "Manage Messages" permissions
 - Check that message ID exists in `scheduled_events.json`
 - Ensure Message Content Intent is enabled in Developer Portal
-- Check if role is disabled (`disabled_roles.json`)
+- Check if role is disabled using `/disable` command
 - Verify bot can send DMs to users
 
 **Commands not appearing**
@@ -333,13 +382,13 @@ The bot creates and manages several JSON files:
 - Commands register automatically on startup
 - Try re-inviting bot with updated permissions
 - Restart bot after permission changes
-- Check console for "Logged in as" message
+- Check console for "✅ Slash commands registered" message
 
 **Signup removed immediately after reacting**
 - This is normal if the role is disabled
-- Check `disabled_roles.json` file
+- Check with `/help` or ask a manager to verify role status
 - User should receive a DM explaining the role is disabled
-- Re-enable role if needed (requires custom command implementation)
+- Manager can use `/enable` to re-enable the role
 
 **Backup alerts not triggering**
 - Alerts only fire for enabled roles with no signups
@@ -352,11 +401,28 @@ The bot creates and manages several JSON files:
 - Format is always DD-MM-YYYY h:mm AM/PM in configured timezone
 - Auto-posting uses `autoPostTimezone` setting
 
+**Duplicate shifts being posted**
+- Bot now scans last 100 messages to prevent this
+- If duplicates still occur, check console logs for errors
+- Verify bot has "Read Message History" permission
+- Check if `scheduled_events.json` has duplicate entries
+
 ---
 
-## 🔄 Version History
+## 📄 Version History
 
-**V2.3.0** (Current)
+**V2.3.1** (Current)
+- Added `/enable` command with dropdown role selection
+- Added `/disable` command with dropdown role selection
+- Added `/help` command with comprehensive command list and categories
+- Implemented `checkForDuplicateShift()` function to prevent duplicate shift posts
+- Added duplicate checking in auto-post workflow (scans last 100 messages)
+- Improved fail-safe handling for duplicate detection
+- Auto-marks dates as posted when duplicates are detected
+- Enhanced role management with intuitive dropdown menus
+- Added detailed help embed organized by command categories
+
+**V2.3.0** (Previous)
 - Changed auto-posting from weekly to daily
 - Added `/addblackout`, `/removeblackout`, `/listblackouts` commands
 - Added `/setstatus` and `/statusclear` commands
@@ -367,7 +433,7 @@ The bot creates and manages several JSON files:
 - Standardized date format to DD-MM-YYYY 12HR throughout
 - Added automatic shift logging when events start
 
-**V2.1.3** (Previous)
+**V2.1.3**
 - Weekly shift posting system
 - Multi-role signups per user
 - Basic role disable/enable system
@@ -392,4 +458,4 @@ For support, questions, or feature requests, please open an issue on GitHub or c
 
 ---
 
-**Retro Replay Bot Rewrite V2.2.2** - Making shift management effortless 🎉
+**Retro Replay Bot Rewrite V2.3.1** - Making shift management effortless 🎉

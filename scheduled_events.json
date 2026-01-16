@@ -27,5 +27,26 @@
     "channelId": "1460772328517533893",
     "signups": {},
     "cancelled": false
+  },
+  "1461551360540672134": {
+    "id": "1461551360540672134",
+    "title": "🍸 Friday Night Shift",
+    "datetime": 1768597200584,
+    "channelId": "1441910464803246091",
+    "signups": {
+      "Active Manager": [],
+      "Backup Manager": [
+        "1182402468999606456",
+        "340192751075328012"
+      ],
+      "Bouncer": [],
+      "Bartender": [
+        "342023753129263104",
+        "1388303604636454953"
+      ],
+      "Dancer": [],
+      "DJ": []
+    },
+    "cancelled": false
   }
 }
