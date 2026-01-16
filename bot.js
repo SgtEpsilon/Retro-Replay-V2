@@ -3,7 +3,6 @@
  * Discord.js v14
  * /repost command - Managers can repost the latest upcoming shift (deletes old, creates new with all signups preserved)
  ***********************/
-
 process.removeAllListeners('warning');
 process.env.NODE_NO_WARNINGS = '1';
 
@@ -1405,14 +1404,20 @@ client.once('ready', async () => {
 
   scheduleAutoPost();
   
-  // Initial check 5 seconds after startup
+  // Initial check 5 seconds after startup - only run if it's the correct hour
   setTimeout(() => {
     const now = DateTime.now().setZone(TIMEZONE);
     console.log(`\n🔍 Initial auto-post check at startup:`);
     console.log(`   Current time: ${now.toFormat('yyyy-MM-dd HH:mm:ss z')}`);
     console.log(`   Current hour: ${now.hour} | Target hour: ${AUTO_POST_HOUR}`);
     console.log(`   Will run: ${now.hour === AUTO_POST_HOUR && now.minute < 10 ? 'YES' : 'NO'}\n`);
-    autoPostWeeklyShifts();
+    
+    // Only run auto-post if it's within the configured hour window
+    if (now.hour === AUTO_POST_HOUR && now.minute < 10) {
+      autoPostWeeklyShifts();
+    } else {
+      console.log(`⏭️ Skipping auto-post at startup - not within configured hour window`);
+    }
   }, 5000);
 });
 
