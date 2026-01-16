@@ -1,7 +1,7 @@
 /***********************
- * Retro Replay Bot Rewrite V2.3.1
+ * Retro Replay Bot Rewrite V2.3.4
  * Discord.js v14
- * Updated with /enable, /disable, /help commands and duplicate shift checking
+ * Backup alerts now sent to #staff-chat
  ***********************/
 
 process.removeAllListeners('warning');
@@ -45,6 +45,7 @@ const SHIFT_LOG_FILE = path.join(__dirname, 'shift_logs.json');
 const DISABLED_ROLES_FILE = path.join(__dirname, 'disabled_roles.json');
 
 const SIGNUP_CHANNEL = process.env.SIGNUP_CHANNEL_ID;
+const STAFF_CHAT_CHANNEL = process.env.STAFF_CHAT_CHANNEL_ID;
 const BAR_STAFF_ROLE_ID = process.env.BAR_STAFF_ROLE_ID;
 
 /* ───────── CLIENT ───────── */
@@ -62,6 +63,8 @@ const client = new Client({
 let events = {};
 let reminderTimers = {};
 let backupAlertTimers = {};
+let backupAlert5MinTimers = {};
+let backupAlertStartTimers = {};
 let autoPosted = {};
 let blackoutDates = [];
 let shiftLogs = [];
@@ -155,48 +158,39 @@ function buildSignupList(signups) {
 /* ───────── DUPLICATE SHIFT CHECK ───────── */
 async function checkForDuplicateShift(channel, shiftDate) {
   try {
-    // Fetch recent messages (up to 100)
     const messages = await channel.messages.fetch({ limit: 100 });
-    
-    // Get the day name for the shift we're trying to post
     const shiftDay = DateTime.fromMillis(shiftDate).setZone(TIMEZONE).toFormat('EEEE');
     const expectedTitle = `🍸 ${shiftDay} Night Shift`;
     
-    // Check if any recent messages match our shift
     for (const [id, message] of messages) {
-      // Check if this message is a shift signup (has embeds and is from our bot)
       if (message.author.id === client.user.id && message.embeds.length > 0) {
         const embed = message.embeds[0];
         
-        // Check if the title matches our expected shift title
         if (embed.title === expectedTitle) {
-          // Check if this event is in our events object and not cancelled
           const existingEvent = events[id];
           if (existingEvent && !existingEvent.cancelled) {
-            // Check if the dates match (same day)
             const existingDate = DateTime.fromMillis(existingEvent.datetime).setZone(TIMEZONE).toISODate();
             const newDate = DateTime.fromMillis(shiftDate).setZone(TIMEZONE).toISODate();
             
             if (existingDate === newDate) {
               console.log(`✅ Shift for ${shiftDay} (${newDate}) already exists (Message ID: ${id})`);
-              return true; // Duplicate found
+              return true;
             }
           }
         }
       }
     }
     
-    return false; // No duplicate found
+    return false;
   } catch (err) {
     console.error('⚠️ Error checking for duplicate shift:', err.message);
-    return false; // On error, allow posting (fail-safe)
+    return false;
   }
 }
 
 /* ───────── AUTO POST LOGIC ───────── */
 async function autoPostWeeklyShifts() {
   try {
-    // Verify channel ID is set
     if (!SIGNUP_CHANNEL) {
       console.error('❌ SIGNUP_CHANNEL_ID not configured in .env');
       return;
@@ -209,11 +203,8 @@ async function autoPostWeeklyShifts() {
       return null;
     });
     
-    if (!channel) {
-      return;
-    }
+    if (!channel) return;
 
-    // Check if bot has required permissions
     if (!channel.permissionsFor(client.user).has(['SendMessages', 'AddReactions', 'ViewChannel'])) {
       console.error('❌ Bot missing required permissions in signup channel');
       console.error('   Required: View Channel, Send Messages, Add Reactions');
@@ -245,11 +236,9 @@ async function autoPostWeeklyShifts() {
       second: 0 
     }).setZone(TIMEZONE);
 
-    // Check for duplicate shift before posting
     const isDuplicate = await checkForDuplicateShift(channel, shiftTime.toMillis());
     if (isDuplicate) {
       console.log(`⏭️ Shift for ${today} (${dateKey}) already posted, skipping duplicate.`);
-      // Mark as posted to prevent future attempts
       autoPosted[dateKey] = Date.now();
       save(AUTO_POST_FILE, autoPosted);
       return;
@@ -334,29 +323,98 @@ function scheduleBackupAlert(id) {
   const ev = events[id];
   if (!ev || ev.cancelled) return;
 
-  const alertTime = ev.datetime - 2 * 60 * 60 * 1000;
-  const delay = alertTime - Date.now();
-  if (delay <= 0) return;
+  // Alert 2 hours before
+  const alertTime2Hours = ev.datetime - 2 * 60 * 60 * 1000;
+  const delay2Hours = alertTime2Hours - Date.now();
+  
+  if (delay2Hours > 0) {
+    backupAlertTimers[id] = setTimeout(async () => {
+      await sendBackupAlert(ev, '2 hours');
+    }, delay2Hours);
+  }
 
-  backupAlertTimers[id] = setTimeout(async () => {
-    const missing = Object.values(roleConfig).filter(
-      r => !disabledRoles.includes(r) && !(ev.signups[r]?.length)
-    );
-    if (!missing.length) return;
+  // Alert 5 minutes before
+  const alertTime5Min = ev.datetime - 5 * 60 * 1000;
+  const delay5Min = alertTime5Min - Date.now();
+  
+  if (delay5Min > 0) {
+    backupAlert5MinTimers[id] = setTimeout(async () => {
+      await sendBackupAlert(ev, '5 minutes');
+    }, delay5Min);
+  }
 
-    try {
-      const channel = await client.channels.fetch(ev.channelId);
-      await channel.send(
-        `⚠️ **BACKUP NEEDED**\nMissing: **${missing.join(', ')}**\n<@&${BAR_STAFF_ROLE_ID}>`
-      );
-    } catch (err) {
-      console.error('⚠️ Backup alert error:', err.message);
+  // Alert at start time
+  const delayStart = ev.datetime - Date.now();
+  
+  if (delayStart > 0) {
+    backupAlertStartTimers[id] = setTimeout(async () => {
+      await sendBackupAlert(ev, 'now (shift starting)');
+    }, delayStart);
+  }
+}
+
+async function sendBackupAlert(ev, timeframe) {
+  const missing = Object.values(roleConfig).filter(
+    r => !disabledRoles.includes(r) && !(ev.signups[r]?.length)
+  );
+  if (!missing.length) return;
+
+  try {
+    if (!STAFF_CHAT_CHANNEL) {
+      console.error('⚠️ STAFF_CHAT_CHANNEL_ID not configured in .env - backup alert not sent');
+      return;
     }
-  }, delay);
+
+    const staffChannel = await client.channels.fetch(STAFF_CHAT_CHANNEL).catch(err => {
+      console.error('⚠️ Cannot access staff chat channel for backup alert');
+      console.error('   Channel ID:', STAFF_CHAT_CHANNEL);
+      console.error('   Error:', err.message);
+      return null;
+    });
+
+    if (!staffChannel) {
+      console.error('❌ Staff chat channel not found, backup alert not sent');
+      return;
+    }
+
+    const signupChannel = await client.channels.fetch(ev.channelId);
+    const guild = signupChannel.guild;
+    
+    const roleMentions = [];
+    for (const missingRole of missing) {
+      let discordRole = null;
+      
+      if (missingRole === 'Backup Manager') {
+        discordRole = guild.roles.cache.find(r => 
+          r.name.toLowerCase() === 'manager' || r.name.toLowerCase() === 'head manager'
+        );
+      } else {
+        discordRole = guild.roles.cache.find(r => 
+          r.name.toLowerCase() === missingRole.toLowerCase()
+        );
+      }
+      
+      if (discordRole) {
+        roleMentions.push(`<@&${discordRole.id}>`);
+      } else {
+        roleMentions.push(`**${missingRole}**`);
+      }
+    }
+    
+    await staffChannel.send(
+      `⚠️ **BACKUP NEEDED** (${timeframe}) for ${ev.title}\nMissing positions:\n${roleMentions.join('\n')}`
+    );
+  } catch (err) {
+    console.error('⚠️ Backup alert error:', err.message);
+  }
 }
 
 /* ───────── SLASH COMMANDS ───────── */
 const commands = [
+  new SlashCommandBuilder()
+    .setName('createevent')
+    .setDescription('Create a new shift event'),
+
   new SlashCommandBuilder()
     .setName('mysignups')
     .setDescription('View your upcoming signups'),
@@ -480,11 +538,124 @@ const rest = new REST({ version: '10' }).setToken(TOKEN);
 
 /* ───────── INTERACTIONS ───────── */
 client.on('interactionCreate', async i => {
-  // Check if it's a command interaction
-  if (!i.isChatInputCommand()) return;
-
   try {
-    /* MY SIGNUPS */
+    if (i.isChatInputCommand() && i.commandName === 'createevent') {
+      if (!hasEventPermission(i.member))
+        return await i.reply({ content: '❌ No permission.', ephemeral: true });
+
+      const modal = new ModalBuilder()
+        .setCustomId('createEventModal')
+        .setTitle('Create New Shift Event');
+
+      const titleInput = new TextInputBuilder()
+        .setCustomId('eventTitle')
+        .setLabel('Event Title')
+        .setStyle(TextInputStyle.Short)
+        .setPlaceholder('e.g., Friday Night Shift')
+        .setRequired(true)
+        .setMaxLength(100);
+
+      const dateInput = new TextInputBuilder()
+        .setCustomId('eventDate')
+        .setLabel('Date (DD-MM-YYYY)')
+        .setStyle(TextInputStyle.Short)
+        .setPlaceholder('e.g., 25-01-2026')
+        .setRequired(true)
+        .setMaxLength(10);
+
+      const timeInput = new TextInputBuilder()
+        .setCustomId('eventTime')
+        .setLabel('Time (h:mm AM/PM)')
+        .setStyle(TextInputStyle.Short)
+        .setPlaceholder('e.g., 9:00 PM')
+        .setRequired(true)
+        .setMaxLength(10);
+
+      const firstRow = new ActionRowBuilder().addComponents(titleInput);
+      const secondRow = new ActionRowBuilder().addComponents(dateInput);
+      const thirdRow = new ActionRowBuilder().addComponents(timeInput);
+
+      modal.addComponents(firstRow, secondRow, thirdRow);
+
+      await i.showModal(modal);
+      return;
+    }
+
+    if (i.isModalSubmit() && i.customId === 'createEventModal') {
+      const title = i.fields.getTextInputValue('eventTitle');
+      const dateStr = i.fields.getTextInputValue('eventDate');
+      const timeStr = i.fields.getTextInputValue('eventTime');
+
+      const datetimeStr = `${dateStr} ${timeStr}`;
+      const dt = DateTime.fromFormat(datetimeStr, 'dd-MM-yyyy h:mm a', { zone: TIMEZONE });
+
+      if (!dt.isValid) {
+        return await i.reply({
+          content: '❌ Invalid date/time format. Please use:\n• Date: DD-MM-YYYY (e.g., 25-01-2026)\n• Time: h:mm AM/PM (e.g., 9:00 PM)',
+          ephemeral: true
+        });
+      }
+
+      if (dt.toMillis() < Date.now()) {
+        return await i.reply({
+          content: '❌ Cannot create an event in the past.',
+          ephemeral: true
+        });
+      }
+
+      await i.deferReply({ ephemeral: true });
+
+      try {
+        const channel = await client.channels.fetch(SIGNUP_CHANNEL);
+        
+        const signups = Object.fromEntries(
+          Object.values(roleConfig).map(role => [role, []])
+        );
+
+        const embed = new EmbedBuilder()
+          .setColor(0x00b0f4)
+          .setTitle(title)
+          .setDescription(
+            `🕒 **When:** ${formatTime(dt.toMillis())}\n\n${buildSignupList(signups)}`
+          )
+          .setFooter({ text: 'React to sign up!' });
+
+        const msg = await channel.send({
+          content: `<@&${BAR_STAFF_ROLE_ID}> New shift posted!`,
+          embeds: [embed]
+        });
+
+        for (const emoji of Object.keys(roleConfig)) {
+          await msg.react(emoji);
+        }
+
+        events[msg.id] = {
+          id: msg.id,
+          title,
+          datetime: dt.toMillis(),
+          channelId: channel.id,
+          signups,
+          cancelled: false
+        };
+
+        scheduleReminder(msg.id);
+        scheduleBackupAlert(msg.id);
+        save(DATA_FILE, events);
+
+        await i.editReply({
+          content: `✅ Event created successfully!\n**${title}**\n🕒 ${formatTime(dt.toMillis())}\n📝 Message ID: ${msg.id}`
+        });
+      } catch (err) {
+        console.error('❌ Error creating event:', err);
+        await i.editReply({
+          content: '❌ Failed to create event. Check bot permissions in the signup channel.'
+        });
+      }
+      return;
+    }
+
+    if (!i.isChatInputCommand()) return;
+
     if (i.commandName === 'mysignups') {
       const userId = i.user.id;
       const results = [];
@@ -493,7 +664,7 @@ client.on('interactionCreate', async i => {
         if (ev.cancelled || ev.datetime < Date.now()) continue;
         for (const [role, users] of Object.entries(ev.signups)) {
           if (users.includes(userId))
-            results.push(`• **${ev.title}** – ${role}\n  🕒 ${formatTime(ev.datetime)}`);
+            results.push(`• **${ev.title}** — ${role}\n  🕒 ${formatTime(ev.datetime)}`);
         }
       }
 
@@ -505,21 +676,15 @@ client.on('interactionCreate', async i => {
       });
     }
 
-    /* NEXT SHIFT */
     if (i.commandName === 'nextshift') {
-      // Find the next open day at 9 PM EST
       const now = DateTime.now().setZone(TIMEZONE);
       let nextOpenDate = null;
       
-      // Check up to 14 days ahead to find the next open day
       for (let j = 0; j < 14; j++) {
         const checkDate = now.plus({ days: j });
         const dayName = checkDate.toFormat('EEEE');
-        
-        // Set to 9 PM (21:00) for this day
         const shiftTime = checkDate.set({ hour: 21, minute: 0, second: 0, millisecond: 0 });
         
-        // Check if this day is an open day and the time hasn't passed yet
         if (config.openDays.includes(dayName) && shiftTime > now) {
           nextOpenDate = shiftTime;
           break;
@@ -549,19 +714,15 @@ client.on('interactionCreate', async i => {
       return await i.reply({ embeds: [embed], ephemeral: true });
     }
 
-    /* ARE WE OPEN */
     if (i.commandName === 'areweopen') {
       const now = DateTime.now().setZone(TIMEZONE);
       const today = now.toFormat('EEEE');
       const todayAt9PM = now.set({ hour: 21, minute: 0, second: 0, millisecond: 0 });
 
-      // Check if today is an open day
       if (config.openDays.includes(today)) {
         const unixTimestamp = Math.floor(todayAt9PM.toMillis() / 1000);
         
-        // Check if 9 PM has already passed today
         if (now > todayAt9PM) {
-          // 9 PM has passed, show next open day instead
           let nextOpenDate = null;
           
           for (let j = 1; j < 14; j++) {
@@ -591,7 +752,6 @@ client.on('interactionCreate', async i => {
           ephemeral: true
         });
       } else {
-        // Today is not an open day, find next open day
         let nextOpenDate = null;
         
         for (let j = 1; j < 14; j++) {
@@ -622,7 +782,6 @@ client.on('interactionCreate', async i => {
       }
     }
 
-    /* CANCEL EVENT */
     if (i.commandName === 'cancelevent') {
       if (!hasEventPermission(i.member))
         return await i.reply({ content: '❌ No permission.', ephemeral: true });
@@ -637,6 +796,8 @@ client.on('interactionCreate', async i => {
       save(DATA_FILE, events);
       clearTimeout(reminderTimers[id]);
       clearTimeout(backupAlertTimers[id]);
+      clearTimeout(backupAlert5MinTimers[id]);
+      clearTimeout(backupAlertStartTimers[id]);
 
       try {
         const ch = await client.channels.fetch(ev.channelId);
@@ -645,7 +806,7 @@ client.on('interactionCreate', async i => {
           embeds: [
             new EmbedBuilder()
               .setColor(0xff0000)
-              .setTitle(`❌ CANCELLED – ${ev.title}`)
+              .setTitle(`❌ CANCELLED — ${ev.title}`)
               .setDescription('This shift has been cancelled.')
           ]
         });
@@ -656,7 +817,6 @@ client.on('interactionCreate', async i => {
       return await i.reply({ content: '✅ Event cancelled.', ephemeral: true });
     }
 
-    /* EDIT EVENT TIME */
     if (i.commandName === 'editeventtime') {
       if (!hasEventPermission(i.member))
         return await i.reply({ content: '❌ No permission.', ephemeral: true });
@@ -677,6 +837,8 @@ client.on('interactionCreate', async i => {
 
       clearTimeout(reminderTimers[id]);
       clearTimeout(backupAlertTimers[id]);
+      clearTimeout(backupAlert5MinTimers[id]);
+      clearTimeout(backupAlertStartTimers[id]);
       scheduleReminder(id);
       scheduleBackupAlert(id);
 
@@ -701,7 +863,6 @@ client.on('interactionCreate', async i => {
       return await i.reply({ content: '✅ Event time updated.', ephemeral: true });
     }
 
-    /* SET STATUS */
     if (i.commandName === 'setstatus') {
       if (!hasEventPermission(i.member))
         return await i.reply({ content: '❌ No permission.', ephemeral: true });
@@ -722,7 +883,6 @@ client.on('interactionCreate', async i => {
       return await i.reply({ content: `✅ Status set to: ${type} ${status}`, ephemeral: true });
     }
 
-    /* CLEAR STATUS */
     if (i.commandName === 'statusclear') {
       if (!hasEventPermission(i.member))
         return await i.reply({ content: '❌ No permission.', ephemeral: true });
@@ -733,7 +893,6 @@ client.on('interactionCreate', async i => {
       return await i.reply({ content: '✅ Status cleared, reverted to default.', ephemeral: true });
     }
 
-    /* ADD BLACKOUT */
     if (i.commandName === 'addblackout') {
       if (!hasEventPermission(i.member))
         return await i.reply({ content: '❌ No permission.', ephemeral: true });
@@ -753,7 +912,6 @@ client.on('interactionCreate', async i => {
       return await i.reply({ content: `✅ Added blackout date: ${dateStr}`, ephemeral: true });
     }
 
-    /* REMOVE BLACKOUT */
     if (i.commandName === 'removeblackout') {
       if (!hasEventPermission(i.member))
         return await i.reply({ content: '❌ No permission.', ephemeral: true });
@@ -770,7 +928,6 @@ client.on('interactionCreate', async i => {
       return await i.reply({ content: `✅ Removed blackout date: ${dateStr}`, ephemeral: true });
     }
 
-    /* LIST BLACKOUTS */
     if (i.commandName === 'listblackouts') {
       if (!blackoutDates.length)
         return await i.reply({ content: '📅 No blackout dates set.', ephemeral: true });
@@ -782,7 +939,6 @@ client.on('interactionCreate', async i => {
       });
     }
 
-    /* ENABLE ROLE */
     if (i.commandName === 'enable') {
       if (!hasEventPermission(i.member))
         return await i.reply({ content: '❌ No permission.', ephemeral: true });
@@ -799,7 +955,6 @@ client.on('interactionCreate', async i => {
       return await i.reply({ content: `✅ **${role}** role has been enabled for signups.`, ephemeral: true });
     }
 
-    /* DISABLE ROLE */
     if (i.commandName === 'disable') {
       if (!hasEventPermission(i.member))
         return await i.reply({ content: '❌ No permission.', ephemeral: true });
@@ -815,7 +970,6 @@ client.on('interactionCreate', async i => {
       return await i.reply({ content: `✅ **${role}** role has been disabled for signups.`, ephemeral: true });
     }
 
-    /* HELP COMMAND */
     if (i.commandName === 'help') {
       const helpEmbed = new EmbedBuilder()
         .setColor(0x00b0f4)
@@ -835,6 +989,7 @@ client.on('interactionCreate', async i => {
           {
             name: '⚙️ Management Commands',
             value: [
+              '`/createevent` - Create a new shift event',
               '`/cancelevent` - Cancel a scheduled event',
               '`/editeventtime` - Edit an event\'s start time',
               '`/enable` - Enable a role for signups',
@@ -874,7 +1029,6 @@ client.on('interactionCreate', async i => {
   } catch (err) {
     console.error(`❌ Error handling command ${i.commandName}:`, err);
     
-    // Try to respond with error if not already replied
     try {
       const errorMsg = { content: '❌ An error occurred processing your command.', ephemeral: true };
       if (i.replied || i.deferred) {
@@ -921,18 +1075,15 @@ client.on('messageReactionAdd', async (reaction, user) => {
     return;
   }
 
-  // Find which role (if any) the user was previously signed up for
   let previousEmoji = null;
   for (const [r, users] of Object.entries(ev.signups)) {
     const idx = users.indexOf(user.id);
     if (idx > -1) {
       users.splice(idx, 1);
-      // Find the emoji for this role
       previousEmoji = Object.keys(roleConfig).find(e => roleConfig[e] === r);
     }
   }
 
-  // Remove the user's previous reaction if they had one
   if (previousEmoji && previousEmoji !== emoji) {
     try {
       const previousReaction = reaction.message.reactions.cache.get(previousEmoji);
@@ -944,7 +1095,6 @@ client.on('messageReactionAdd', async (reaction, user) => {
     }
   }
 
-  // Add user to the selected role
   if (!ev.signups[role]) ev.signups[role] = [];
   if (!ev.signups[role].includes(user.id)) {
     ev.signups[role].push(user.id);
@@ -952,7 +1102,6 @@ client.on('messageReactionAdd', async (reaction, user) => {
 
   save(DATA_FILE, events);
 
-  // Update the message embed
   try {
     const embed = new EmbedBuilder()
       .setColor(0x00b0f4)
@@ -1017,7 +1166,6 @@ client.on('messageReactionRemove', async (reaction, user) => {
 client.once('ready', async () => {
   console.log(`✅ Logged in as ${client.user.tag}`);
   
-  // Verify signup channel access
   if (SIGNUP_CHANNEL) {
     try {
       const channel = await client.channels.fetch(SIGNUP_CHANNEL);
@@ -1038,6 +1186,27 @@ client.once('ready', async () => {
   } else {
     console.error('⚠️ SIGNUP_CHANNEL_ID not set in .env');
   }
+
+  if (STAFF_CHAT_CHANNEL) {
+    try {
+      const staffChannel = await client.channels.fetch(STAFF_CHAT_CHANNEL);
+      if (staffChannel) {
+        const perms = staffChannel.permissionsFor(client.user);
+        if (perms.has(['ViewChannel', 'SendMessages'])) {
+          console.log('✅ Staff chat channel access verified');
+        } else {
+          console.error('⚠️ Bot has access to staff chat but missing permissions');
+          console.error('   Required: View Channel, Send Messages');
+        }
+      }
+    } catch (err) {
+      console.error('⚠️ Cannot access staff chat channel - check bot permissions');
+      console.error('   Channel ID:', STAFF_CHAT_CHANNEL);
+      console.error('   Backup alerts will not be sent');
+    }
+  } else {
+    console.error('⚠️ STAFF_CHAT_CHANNEL_ID not set in .env - backup alerts will not be sent');
+  }
   
   setDefaultStatus();
   
@@ -1048,7 +1217,6 @@ client.once('ready', async () => {
 
   scheduleAutoPost();
   
-  // Run auto-post check on startup after a delay
   setTimeout(autoPostWeeklyShifts, 5000);
 });
 

@@ -48,5 +48,20 @@
       "DJ": []
     },
     "cancelled": false
+  },
+  "1461608086363045938": {
+    "id": "1461608086363045938",
+    "title": "Test",
+    "datetime": 1768563000000,
+    "channelId": "1460772328517533893",
+    "signups": {
+      "Active Manager": [],
+      "Backup Manager": [],
+      "Bouncer": [],
+      "Bartender": [],
+      "Dancer": [],
+      "DJ": []
+    },
+    "cancelled": false
   }
 }
