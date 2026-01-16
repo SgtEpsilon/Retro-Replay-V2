@@ -1,4 +1,4 @@
-# 🎉 Retro Replay Bot Rewrite V2.3.5
+# 🎉 Retro Replay Bot Rewrite V2.3.6
 
 A comprehensive **Discord.js v14** bot designed for managing bar/club staff scheduling with **emoji-based signups**, **automated shift posting**, **multi-stage backup alerts**, **role management**, and **detailed shift logging**.
 
@@ -26,6 +26,7 @@ Perfect for RP servers, virtual clubs, bars, and any staff-driven community that
 - Emoji-based role signups (react to join, unreact to leave)
 - Live-updating embeds showing current staff roster
 - **Discord dynamic timestamps** - Shows time in each user's local timezone with live countdown
+- **Manual refresh command** - Anyone can refresh shift embeds to fix display issues
 - **One role per user** - selecting new role removes old signup
 - Automatic reaction cleanup for disabled roles
 - Date/time format: **DD-MM-YYYY 12HR** (e.g., 15-01-2026 9:00 PM)
@@ -74,6 +75,7 @@ Perfect for RP servers, virtual clubs, bars, and any staff-driven community that
 | `/mysignups` | View all your upcoming shift signups |
 | `/nextshift` | View the next upcoming shift with countdown |
 | `/areweopen` | Check if the bar is open today |
+| `/refresh <messageid>` | Refresh a shift signup embed (fixes display issues, updates timestamps) |
 | `/help` | Display comprehensive command list and signup guide |
 
 ### ⚙️ Manager Commands (Restricted)
@@ -247,9 +249,10 @@ BAR_STAFF_ROLE_ID=role_id_to_ping_for_shifts
 2. Bot automatically removes their previous role signup (one role per shift)
 3. Embed updates instantly with their username
 4. **Discord timestamps** update automatically showing countdown in user's timezone
-5. Removing reaction removes user from that role
-6. All changes persist across bot restarts
-7. Reactions for disabled roles are auto-removed with DM notification
+5. **Manual refresh available** - Use `/refresh` if embed doesn't update properly
+6. Removing reaction removes user from that role
+7. All changes persist across bot restarts
+8. Reactions for disabled roles are auto-removed with DM notification
 
 ### Multi-Stage Backup Alert System
 The bot sends backup alerts at **three different times** to #staff-chat:
@@ -395,6 +398,21 @@ The bot creates and manages several JSON files:
 → Shows required permission roles dynamically
 ```
 
+### Refreshing a Shift Embed
+```
+/refresh messageid:123456789012345678
+→ Refreshes the shift signup embed
+→ Updates timestamps and signup list
+→ Fixes display issues if embed didn't update
+→ Available to all users (no special permissions required)
+
+Use cases:
+• Embed not updating after reactions
+• Timestamps showing incorrectly
+• Signup list out of sync
+• General display problems
+```
+
 ### Managing Blackouts
 ```
 /listblackouts
@@ -425,6 +443,7 @@ The bot creates and manages several JSON files:
 - **Backup alerts:** Sent to #staff-chat at 2 hours, 5 minutes, and shift start time
 - **Staff chat required:** Must configure STAFF_CHAT_CHANNEL_ID for backup alerts to work
 - **Permission messages:** Error messages now show exactly which roles are required
+- **Manual refresh:** Anyone can use `/refresh` to fix embed display issues
 
 ---
 
@@ -452,6 +471,7 @@ The bot creates and manages several JSON files:
 - Ensure Message Content Intent is enabled in Developer Portal
 - Check if role is disabled using `/disable` command
 - Verify bot can send DMs to users
+- Try using `/refresh messageid:XXXXXXXXX` to manually update the embed
 
 **Commands not appearing**
 - Bot needs "Use Application Commands" permission
@@ -491,12 +511,26 @@ The bot creates and manages several JSON files:
 - Discord timestamps update automatically - no bot action needed
 - If not showing, verify embed was created/updated with new timestamp code
 - Users must have Discord client updated to see dynamic timestamps
+- Try using `/refresh messageid:XXXXXXXXX` to regenerate timestamps
+
+**Embed not updating after reactions**
+- This is usually temporary - wait a few seconds
+- If persist, use `/refresh messageid:XXXXXXXXX` to manually update
+- Check bot has "Manage Messages" permission
+- Verify bot isn't rate-limited (too many edits at once)
 
 ---
 
 ## 📄 Version History
 
-**V2.3.5** (Current)
+**V2.3.6** (Current)
+- **NEW:** `/refresh` command - Manually refresh shift signup embeds (available to all users)
+- Allows anyone to fix embed display issues without manager intervention
+- Refreshes timestamps and signup lists on demand
+- Useful for recovering from display errors or sync issues
+- Added to help command and user command documentation
+
+**V2.3.5**
 - **BREAKING CHANGE:** Unified timezone configuration - removed `autoPostTimezone`
 - **NEW:** All timezone operations now use single `timezone` setting from config.json
 - **NEW:** Discord dynamic timestamps added to shift embeds (shows in user's local timezone)
@@ -572,4 +606,4 @@ For support, questions, or feature requests, please open an issue on GitHub or c
 
 ---
 
-**Retro Replay Bot Rewrite V2.3.5** - Making shift management effortless 🎉
+**Retro Replay Bot Rewrite V2.3.6** - Making shift management effortless 🎉
