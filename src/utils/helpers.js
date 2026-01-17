@@ -1,83 +1,92 @@
 const { DateTime } = require('luxon');
-const { ActivityType, EmbedBuilder } = require('discord.js');
-const { TIMEZONE, roleConfig, config } = require('./constants');
-const { disabledRoles, getCustomStatus } = require('./storage');
-const { blackoutDates } = require('./storage');
+const { EmbedBuilder, ActivityType } = require('discord.js');
+const config = require('../../config.json');
+const { getBlackoutDates, getEvents } = require('./storage');
+const { roleConfig, TIMEZONE } = require('./constants');
 
-// Check if user has event creation permission
+// Check if user has permission to create/manage events
 function hasEventPermission(member) {
   if (!member || !member.roles) return false;
-  return member.roles.cache.some(r =>
-    config.eventCreatorRoles.includes(r.name)
+  return config.eventCreatorRoles.some(roleName => 
+    member.roles.cache.some(role => role.name === roleName)
   );
 }
 
-// Format timestamp
-function formatTime(ms) {
-  return DateTime.fromMillis(ms)
-    .setZone(TIMEZONE)
-    .toFormat('dd-MM-yyyy h:mm a');
+// Format timestamp for display
+function formatTime(timestamp) {
+  const dt = DateTime.fromMillis(timestamp).setZone(TIMEZONE);
+  return dt.toFormat('EEEE, MMMM d, yyyy \'at\' h:mm a ZZZZ');
 }
 
-// Check if date is a blackout date
-function isBlackoutDate(date) {
-  const checkDate = DateTime.fromMillis(date).setZone(TIMEZONE).toISODate();
-  return blackoutDates.some(bd => {
-    const blackout = DateTime.fromISO(bd, { zone: TIMEZONE }).toISODate();
-    return blackout === checkDate;
-  });
-}
-
-// Set default bot status
-function setDefaultStatus(client) {
-  if (getCustomStatus()) return;
+// Check if a date is a blackout date
+function isBlackoutDate(timestamp) {
+  const blackoutDates = getBlackoutDates(); // ✅ Get live reference
   
-  try {
-    client.user.setPresence({
-      activities: [{
-        name: '🍸 Shifts at the Retro Bar',
-        type: ActivityType.Watching
-      }],
-      status: 'online'
-    });
-  } catch (err) {
-    console.error('⚠️ Error setting status:', err.message);
+  if (!blackoutDates || !Array.isArray(blackoutDates)) {
+    return false;
   }
-}
-
-// Build signup list for embed
-function buildSignupList(signups) {
-  return Object.entries(roleConfig).map(([emoji, role]) => {
-    if (disabledRoles.includes(role))
-      return `**${emoji} ${role}:** ~~Disabled~~`;
-
-    const users = signups[role] || [];
-    return `**${emoji} ${role}:**\n${
-      users.length
-        ? users.map(u => `• <@${u}>`).join('\n')
-        : '*No signups yet*'
-    }`;
-  }).join('\n\n');
+  
+  const dt = DateTime.fromMillis(timestamp).setZone(TIMEZONE);
+  const dateStr = dt.toFormat('dd-MM-yyyy');
+  return blackoutDates.some(d => d === dateStr);
 }
 
 // Create event embed
 function createEventEmbed(title, datetime, signups) {
-  const unixTimestamp = Math.floor(datetime / 1000);
-  
-  return new EmbedBuilder()
-    .setColor(0x00b0f4)
+  const embed = new EmbedBuilder()
+    .setColor('#00B0F4')
     .setTitle(title)
-    .setDescription(
-      `🕒 **When:** ${formatTime(datetime)}\n<t:${unixTimestamp}:F>\n<t:${unixTimestamp}:R>\n\n${buildSignupList(signups)}`
-    )
-    .setFooter({ text: 'React to sign up!' });
+    .setDescription(`🕒 <t:${Math.floor(datetime / 1000)}:F> (<t:${Math.floor(datetime / 1000)}:R>)`)
+    .setTimestamp();
+
+  // Build signup fields
+  const signupFields = [];
+  
+  for (const [emoji, role] of Object.entries(roleConfig)) {
+    const users = signups[role] || [];
+    const userList = users.length > 0
+      ? users.map(id => `<@${id}>`).join('\n')
+      : 'None';
+    
+    signupFields.push({
+      name: `${emoji} ${role} (${users.length})`,
+      value: userList,
+      inline: true
+    });
+  }
+
+  embed.addFields(signupFields);
+
+  return embed;
+}
+
+// Set default bot status
+function setDefaultStatus(client) {
+  client.user.setPresence({
+    activities: [{ 
+      name: '🍸 Shifts at the Retro Bar', 
+      type: ActivityType.Watching 
+    }],
+    status: 'online'
+  });
+}
+
+// Set custom bot status
+function setCustomStatus(client, statusText, activityType = ActivityType.Playing) {
+  client.user.setPresence({
+    activities: [{ 
+      name: statusText, 
+      type: activityType 
+    }],
+    status: 'online'
+  });
 }
 
 module.exports = {
   hasEventPermission,
   formatTime,
   isBlackoutDate,
+  createEventEmbed,
   setDefaultStatus,
-  buildSignupList,
-  createEventEmbed
+  setCustomStatus
 };
