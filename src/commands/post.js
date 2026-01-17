@@ -4,7 +4,7 @@ const { DateTime } = require('luxon');
 const config = require('../../config.json');
 const { hasEventPermission, createEventEmbed } = require('../utils/helpers');
 const { 
-  events, 
+  getEvents,
   saveEvents, 
   scheduleReminder, 
   scheduleBackupAlert 
@@ -19,6 +19,7 @@ const {
  * Get all upcoming scheduled events that haven't been posted yet
  */
 function getUpcomingScheduledEvents() {
+  const events = getEvents(); // ✅ Get live reference
   const now = Date.now();
   
   return Object.entries(events)
@@ -35,6 +36,8 @@ function getUpcomingScheduledEvents() {
  * Post a single scheduled event to Discord
  */
 async function postEventToDiscord(client, eventId, event) {
+  const events = getEvents(); // ✅ Get live reference
+  
   try {
     const channel = await client.channels.fetch(SIGNUP_CHANNEL);
     
@@ -74,8 +77,11 @@ async function postEventToDiscord(client, eventId, event) {
     scheduleReminder(msg.id, client);
     scheduleBackupAlert(msg.id, client);
 
+    console.log(`✅ Posted event: ${event.title} (Message ID: ${msg.id})`);
+
     return { success: true, messageId: msg.id, event: events[msg.id] };
   } catch (error) {
+    console.error(`❌ Error posting event ${eventId}:`, error.message);
     return { success: false, error: error.message };
   }
 }
@@ -101,7 +107,7 @@ async function handlePost(interaction) {
     if (scheduledEvents.length === 0) {
       const noEventsEmbed = new EmbedBuilder()
         .setColor('#FFA500')
-        .setTitle('📭 No Upcoming Scheduled Events')
+        .setTitle('🔭 No Upcoming Scheduled Events')
         .setDescription('There are no upcoming scheduled events waiting to be posted to Discord.')
         .addFields({
           name: 'ℹ️ Info',
@@ -116,7 +122,7 @@ async function handlePost(interaction) {
     // Build list of scheduled events
     const eventList = scheduledEvents.map(([id, event], index) => {
       const dt = DateTime.fromMillis(event.datetime).setZone(config.timezone);
-      const eventType = event.manuallyCreated ? '✍️ Manual' : '🤖 Auto';
+      const eventType = event.manuallyCreated ? '✏️ Manual' : '🤖 Auto';
       const timeUntil = dt.diffNow(['days', 'hours']).toObject();
       const daysText = timeUntil.days >= 1 ? `${Math.floor(timeUntil.days)}d ` : '';
       const hoursText = `${Math.floor(timeUntil.hours % 24)}h`;
@@ -134,7 +140,7 @@ async function handlePost(interaction) {
     // Create select menu options (max 25)
     const options = scheduledEvents.slice(0, 25).map(([id, event], index) => {
       const dt = DateTime.fromMillis(event.datetime).setZone(config.timezone);
-      const eventType = event.manuallyCreated ? '✍️' : '🤖';
+      const eventType = event.manuallyCreated ? '✏️' : '🤖';
       
       return new StringSelectMenuOptionBuilder()
         .setLabel(`${index + 1}. ${event.title}`)
@@ -187,7 +193,7 @@ async function handlePost(interaction) {
       if (selectedValue === 'post_all') {
         // Post all events
         await interaction.followUp({
-          content: '🔄 Posting all events to Discord...',
+          content: '📄 Posting all events to Discord...',
           ephemeral: true
         });
 
@@ -209,9 +215,16 @@ async function handlePost(interaction) {
           await new Promise(resolve => setTimeout(resolve, 1000));
         }
 
-        // Save changes
+        // ✅ CRITICAL: Save all changes at once
         if (results.success.length > 0) {
-          saveEvents();
+          const saved = saveEvents();
+          if (!saved) {
+            console.error('❌ CRITICAL: Failed to save posted events!');
+            await interaction.followUp({
+              content: '⚠️ Events were posted but there was an error saving the data. Please contact an admin.',
+              ephemeral: true
+            });
+          }
         }
 
         // Build results embed
@@ -254,14 +267,22 @@ async function handlePost(interaction) {
         const [eventId, event] = scheduledEvents.find(([id]) => id === selectedValue);
 
         await interaction.followUp({
-          content: `🔄 Posting **${event.title}** to Discord...`,
+          content: `📄 Posting **${event.title}** to Discord...`,
           ephemeral: true
         });
 
         const result = await postEventToDiscord(interaction.client, eventId, event);
 
         if (result.success) {
-          saveEvents();
+          // ✅ CRITICAL: Save immediately after posting
+          const saved = saveEvents();
+          if (!saved) {
+            console.error('❌ CRITICAL: Failed to save posted event!');
+            return await interaction.followUp({
+              content: '⚠️ Event was posted but there was an error saving the data. Please contact an admin.',
+              ephemeral: true
+            });
+          }
 
           const dt = DateTime.fromMillis(event.datetime).setZone(config.timezone);
           const successEmbed = new EmbedBuilder()
@@ -270,7 +291,7 @@ async function handlePost(interaction) {
             .setDescription(`**${event.title}** has been posted to Discord!`)
             .addFields(
               { name: '📅 Date & Time', value: dt.toFormat('EEEE, MMMM d, yyyy \'at\' h:mm a'), inline: false },
-              { name: '📍 Message ID', value: result.messageId, inline: false },
+              { name: '🆔 Message ID', value: result.messageId, inline: false },
               { name: '🔗 Channel', value: `<#${SIGNUP_CHANNEL}>`, inline: false }
             )
             .setTimestamp();

@@ -1,10 +1,12 @@
 const { hasEventPermission, createEventEmbed } = require('../utils/helpers');
-const { events, saveEvents, clearEventTimers, scheduleReminder, scheduleBackupAlert } = require('../utils/storage');
+const { getEvents, saveEvents, clearEventTimers, scheduleReminder, scheduleBackupAlert } = require('../utils/storage');
 const { SIGNUP_CHANNEL, BAR_STAFF_ROLE_ID, roleConfig } = require('../utils/constants');
 
 async function repostHandler(i) {
   if (!hasEventPermission(i.member))
     return await i.reply({ content: '❌ No permission.', ephemeral: true });
+
+  const events = getEvents(); // ✅ Get live reference
 
   // Only get events that have been posted to Discord (have a messageId)
   const upcoming = Object.values(events)
@@ -35,9 +37,9 @@ async function repostHandler(i) {
     // Clear timers for the old event
     clearEventTimers(ev.id);
     
-    // Remove the old event entry
-    delete events[ev.id];
-
+    // Store the old event ID for cleanup
+    const oldEventId = ev.id;
+    
     // Create the new embed
     const embed = createEventEmbed(ev.title, ev.datetime, ev.signups);
     
@@ -50,6 +52,9 @@ async function repostHandler(i) {
     for (const emoji of Object.keys(roleConfig)) {
       await newMsg.react(emoji);
     }
+
+    // Remove the old event entry
+    delete events[oldEventId];
 
     // Create new event entry with the new message ID
     events[newMsg.id] = {
@@ -64,10 +69,21 @@ async function repostHandler(i) {
     scheduleReminder(newMsg.id, i.client);
     scheduleBackupAlert(newMsg.id, i.client);
     
-    saveEvents();
+    // ✅ CRITICAL: Save immediately after reposting
+    const saved = saveEvents();
+    if (!saved) {
+      console.error('❌ CRITICAL: Failed to save reposted event!');
+      return await i.editReply({
+        content: '⚠️ Shift was reposted but there was an error saving the data. Please contact an admin and note the new message ID: ' + newMsg.id
+      });
+    }
+
+    console.log(`✅ Reposted event: ${ev.title}`);
+    console.log(`   Old Message ID: ${oldEventId}`);
+    console.log(`   New Message ID: ${newMsg.id}`);
 
     await i.editReply({
-      content: `✅ Shift reposted!\n**${ev.title}**\n📍 New Message ID: ${newMsg.id}`
+      content: `✅ Shift reposted!\n**${ev.title}**\n🆔 New Message ID: ${newMsg.id}`
     });
   } catch (err) {
     console.error('⚠️ Error reposting event:', err.message);

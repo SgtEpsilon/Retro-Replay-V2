@@ -9,7 +9,7 @@ require('dotenv').config();
 
 const { client } = require('./src/client');
 const { registerCommands } = require('./src/commands/register');
-const { loadData, scheduleReminder, scheduleBackupAlert } = require('./src/utils/storage');
+const { loadData, scheduleReminder, scheduleBackupAlert, getEvents } = require('./src/utils/storage');
 const { scheduleAutoPost, autoPostWeeklyShifts } = require('./src/services/autoPost');
 const { setDefaultStatus } = require('./src/utils/helpers');
 const { DateTime } = require('luxon');
@@ -23,12 +23,56 @@ require('./src/events/reactionRemove');
 // Register slash commands
 registerCommands();
 
+// Graceful shutdown handler
+async function gracefulShutdown(signal) {
+  console.log(`\n🛑 Received ${signal}, shutting down gracefully...`);
+  
+  try {
+    const { saveAll } = require('./src/utils/storage');
+    const success = saveAll();
+    
+    if (success) {
+      console.log('✅ All data saved successfully');
+    } else {
+      console.log('⚠️ Some data may not have saved properly');
+    }
+    
+    // Destroy Discord client
+    client.destroy();
+    console.log('✅ Discord client closed');
+    
+    process.exit(0);
+  } catch (err) {
+    console.error('❌ Error during shutdown:', err);
+    process.exit(1);
+  }
+}
+
+// Register shutdown handlers
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+
+// Handle uncaught errors
+process.on('uncaughtException', (err) => {
+  console.error('❌ UNCAUGHT EXCEPTION:', err);
+  gracefulShutdown('uncaughtException');
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('❌ UNHANDLED REJECTION at:', promise, 'reason:', reason);
+  // Don't exit on unhandled rejection, just log it
+});
+
+// Auto-save interval (every 5 minutes)
+let autoSaveInterval;
+
 // Bot ready event
 client.once('ready', async () => {
-  const { events } = loadData();
+  loadData();
+  const events = getEvents();
   
   console.log(`✅ Logged in as ${client.user.tag}`);
-  console.log(`\n⚙️  Configuration:`);
+  console.log(`\n⚙️ Configuration:`);
   console.log(`   Timezone: ${config.timezone}`);
   console.log(`   Auto-post hour: ${config.autoPostHour} (${config.autoPostHour}:00 ${config.timezone})`);
   console.log(`   Shift start hour: ${config.shiftStartHour} (${config.shiftStartHour}:00 ${config.timezone})`);
@@ -49,6 +93,14 @@ client.once('ready', async () => {
 
   // Start auto-post scheduler
   scheduleAutoPost(client);
+  
+  // Start auto-save interval
+  autoSaveInterval = setInterval(() => {
+    const { saveAll } = require('./src/utils/storage');
+    saveAll();
+  }, 5 * 60 * 1000); // Every 5 minutes
+  
+  console.log('💾 Auto-save enabled (every 5 minutes)');
   
   // Initial check 5 seconds after startup
   setTimeout(() => {

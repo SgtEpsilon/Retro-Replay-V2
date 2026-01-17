@@ -1,4 +1,5 @@
 const fs = require('fs');
+const path = require('path');
 const {
   DATA_FILE,
   AUTO_POST_FILE,
@@ -7,7 +8,7 @@ const {
   DISABLED_ROLES_FILE
 } = require('./constants');
 
-// Storage objects
+// Storage objects - these are the ACTUAL data stores
 let events = {};
 let reminderTimers = {};
 let backupAlertTimers = {};
@@ -19,59 +20,129 @@ let shiftLogs = [];
 let disabledRoles = [];
 let customStatus = null;
 
-// Load data from file
+// Atomic save with backup
+function saveAtomic(file, data) {
+  try {
+    const dir = path.dirname(file);
+    const backupPath = `${file}.backup`;
+    const tempPath = `${file}.tmp`;
+    
+    // Write to temporary file first
+    fs.writeFileSync(tempPath, JSON.stringify(data, null, 2));
+    
+    // Create backup of current file if it exists
+    if (fs.existsSync(file)) {
+      try {
+        fs.copyFileSync(file, backupPath);
+      } catch (backupErr) {
+        console.error(`⚠️ Warning: Could not create backup for ${file}`);
+      }
+    }
+    
+    // Atomically replace the original file
+    fs.renameSync(tempPath, file);
+    
+    return true;
+  } catch (err) {
+    console.error(`❌ CRITICAL: Failed to save ${file}:`, err.message);
+    
+    // Try to clean up temp file
+    try {
+      const tempPath = `${file}.tmp`;
+      if (fs.existsSync(tempPath)) {
+        fs.unlinkSync(tempPath);
+      }
+    } catch (cleanupErr) {
+      // Silent cleanup failure
+    }
+    
+    return false;
+  }
+}
+
+// Load with automatic backup recovery
 function load(file, fallback) {
   try {
-    return fs.existsSync(file) ? JSON.parse(fs.readFileSync(file)) : fallback;
+    if (fs.existsSync(file)) {
+      const data = JSON.parse(fs.readFileSync(file, 'utf8'));
+      return data;
+    }
+    return fallback;
   } catch (err) {
     console.error(`⚠️ Error loading ${file}:`, err.message);
+    
+    // Try backup
+    const backupPath = `${file}.backup`;
+    if (fs.existsSync(backupPath)) {
+      try {
+        console.log(`🔄 Attempting to restore from backup: ${backupPath}`);
+        const backupData = JSON.parse(fs.readFileSync(backupPath, 'utf8'));
+        console.log(`✅ Successfully restored from backup!`);
+        
+        // Restore the main file
+        saveAtomic(file, backupData);
+        
+        return backupData;
+      } catch (backupErr) {
+        console.error(`❌ Backup restoration failed:`, backupErr.message);
+      }
+    }
+    
+    console.log(`⚠️ Using fallback data for ${file}`);
     return fallback;
   }
 }
 
-// Save data to file
-const save = (file, data) => {
-  try {
-    fs.writeFileSync(file, JSON.stringify(data, null, 2));
-  } catch (err) {
-    console.error(`⚠️ Error saving ${file}:`, err.message);
-  }
-};
-
 // Initialize data
 function loadData() {
+  console.log('📂 Loading data files...');
+  
   events = load(DATA_FILE, {});
   autoPosted = load(AUTO_POST_FILE, {});
   blackoutDates = load(BLACKOUT_FILE, []);
   shiftLogs = load(SHIFT_LOG_FILE, []);
   disabledRoles = load(DISABLED_ROLES_FILE, []);
   
+  console.log(`   ✅ Loaded ${Object.keys(events).length} events`);
+  console.log(`   ✅ Loaded ${Object.keys(autoPosted).length} auto-post records`);
+  console.log(`   ✅ Loaded ${blackoutDates.length} blackout dates`);
+  console.log(`   ✅ Loaded ${shiftLogs.length} shift logs`);
+  
   return { events, autoPosted, blackoutDates, shiftLogs, disabledRoles };
 }
 
-// Save events
+// Save events with validation
 function saveEvents() {
-  save(DATA_FILE, events);
+  if (typeof events !== 'object' || events === null) {
+    console.error('❌ CRITICAL: Invalid events data, skipping save');
+    return false;
+  }
+  
+  const success = saveAtomic(DATA_FILE, events);
+  if (success) {
+    console.log(`💾 Saved ${Object.keys(events).length} events`);
+  }
+  return success;
 }
 
 // Save auto-posted dates
 function saveAutoPosted() {
-  save(AUTO_POST_FILE, autoPosted);
+  return saveAtomic(AUTO_POST_FILE, autoPosted);
 }
 
 // Save blackout dates
 function saveBlackoutDates() {
-  save(BLACKOUT_FILE, blackoutDates);
+  return saveAtomic(BLACKOUT_FILE, blackoutDates);
 }
 
 // Save shift logs
 function saveShiftLogs() {
-  save(SHIFT_LOG_FILE, shiftLogs);
+  return saveAtomic(SHIFT_LOG_FILE, shiftLogs);
 }
 
 // Save disabled roles
 function saveDisabledRoles() {
-  save(DISABLED_ROLES_FILE, disabledRoles);
+  return saveAtomic(DISABLED_ROLES_FILE, disabledRoles);
 }
 
 // Schedule reminder
@@ -135,15 +206,44 @@ function clearEventTimers(id) {
   clearTimeout(backupAlertTimers[id]);
   clearTimeout(backupAlert5MinTimers[id]);
   clearTimeout(backupAlertStartTimers[id]);
+  
+  delete reminderTimers[id];
+  delete backupAlertTimers[id];
+  delete backupAlert5MinTimers[id];
+  delete backupAlertStartTimers[id];
 }
 
+// Get live reference to events (CRITICAL FIX)
+function getEvents() {
+  return events;
+}
+
+function getAutoPosted() {
+  return autoPosted;
+}
+
+function getBlackoutDates() {
+  return blackoutDates;
+}
+
+function getShiftLogs() {
+  return shiftLogs;
+}
+
+function getDisabledRoles() {
+  return disabledRoles;
+}
+
+// CRITICAL: Export getter functions instead of static references
 module.exports = {
-  events,
-  autoPosted,
-  blackoutDates,
-  shiftLogs,
-  disabledRoles,
-  customStatus,
+  // Getter functions - these return live references
+  getEvents,
+  getAutoPosted,
+  getBlackoutDates,
+  getShiftLogs,
+  getDisabledRoles,
+  
+  // Functions
   loadData,
   saveEvents,
   saveAutoPosted,
@@ -154,5 +254,20 @@ module.exports = {
   scheduleBackupAlert,
   clearEventTimers,
   getCustomStatus: () => customStatus,
-  setCustomStatus: (status) => { customStatus = status; }
+  setCustomStatus: (status) => { customStatus = status; },
+  
+  // Emergency save all
+  saveAll: () => {
+    const results = {
+      events: saveEvents(),
+      autoPosted: saveAutoPosted(),
+      blackoutDates: saveBlackoutDates(),
+      shiftLogs: saveShiftLogs(),
+      disabledRoles: saveDisabledRoles()
+    };
+    
+    const allSuccess = Object.values(results).every(r => r !== false);
+    console.log(allSuccess ? '✅ All data saved successfully' : '⚠️ Some saves failed');
+    return allSuccess;
+  }
 };

@@ -7,8 +7,8 @@ const {
   roleConfig
 } = require('../utils/constants');
 const { 
-  events, 
-  autoPosted, 
+  getEvents,
+  getAutoPosted,
   saveEvents, 
   saveAutoPosted,
   scheduleReminder,
@@ -25,6 +25,7 @@ function getWeekStart(now) {
 
 // Check if we have a schedule for the current week
 function hasScheduleForCurrentWeek() {
+  const events = getEvents(); // ✅ Get live reference
   const now = DateTime.now().setZone(TIMEZONE);
   const weekStart = getWeekStart(now);
   const weekEnd = weekStart.plus({ days: 7 });
@@ -41,6 +42,8 @@ function hasScheduleForCurrentWeek() {
 
 // Post scheduled events to Discord
 async function postScheduledEvents(client) {
+  const events = getEvents(); // ✅ Get live reference
+  
   try {
     if (!SIGNUP_CHANNEL) {
       console.error('❌ SIGNUP_CHANNEL_ID not configured in .env');
@@ -128,8 +131,13 @@ async function postScheduledEvents(client) {
     }
 
     if (eventsPosted > 0) {
-      saveEvents();
-      console.log(`✅ Posted ${eventsPosted} scheduled event(s) to Discord`);
+      // ✅ CRITICAL: Save immediately after posting
+      const saved = saveEvents();
+      if (!saved) {
+        console.error('❌ CRITICAL: Failed to save posted events!');
+      } else {
+        console.log(`✅ Posted ${eventsPosted} scheduled event(s) to Discord and saved`);
+      }
     }
 
   } catch (err) {
@@ -150,6 +158,9 @@ async function checkAndPostScheduledEvents(client) {
 
 // Generate weekly schedule data (creates event entries, doesn't post to Discord)
 async function generateWeeklySchedule() {
+  const events = getEvents(); // ✅ Get live reference
+  const autoPosted = getAutoPosted(); // ✅ Get live reference
+  
   const now = DateTime.now().setZone(TIMEZONE);
   const weekStart = getWeekStart(now);
 
@@ -216,12 +227,21 @@ async function generateWeeklySchedule() {
   }
 
   if (eventsCreated > 0) {
-    saveEvents();
+    // ✅ CRITICAL: Save immediately after creating events
+    const savedEvents = saveEvents();
+    if (!savedEvents) {
+      console.error('❌ CRITICAL: Failed to save generated events!');
+      return 0;
+    }
     
     // Mark this week as having schedule data created
     const weekKey = weekStart.toISODate();
     autoPosted[weekKey] = Date.now();
-    saveAutoPosted();
+    const savedAutoPosted = saveAutoPosted();
+    
+    if (!savedAutoPosted) {
+      console.error('⚠️ Warning: Failed to save auto-posted tracking');
+    }
     
     console.log(`💾 Saved ${eventsCreated} scheduled event(s) to scheduled_events.json`);
     console.log(`   Week starting: ${weekKey}`);
@@ -248,7 +268,7 @@ async function checkAndGenerateSchedule(client) {
   // 1. It's Monday at midnight (preferred time)
   // 2. OR no schedule exists for the current week (catch-up)
   if ((isMonday && isMidnight && now.minute < 10) || !hasScheduleForCurrentWeek()) {
-    console.log(`🔄 Generating weekly schedule...`);
+    console.log(`📄 Generating weekly schedule...`);
     console.log(`   Reason: ${isMonday && isMidnight ? 'Monday midnight scheduled generation' : 'No schedule exists for current week'}`);
     await generateWeeklySchedule();
   }

@@ -6,7 +6,7 @@ const {
   ActionRowBuilder
 } = require('discord.js');
 const { hasEventPermission, formatTime } = require('../utils/helpers');
-const { events, saveEvents } = require('../utils/storage');
+const { getEvents, saveEvents } = require('../utils/storage');
 const { TIMEZONE } = require('../utils/constants');
 
 async function showModal(i) {
@@ -75,6 +75,8 @@ async function handleSubmit(i) {
   await i.deferReply({ ephemeral: true });
 
   try {
+    const events = getEvents(); // ✅ Get live reference
+    
     // Create unique ID for the scheduled event
     const eventId = `scheduled_manual_${Date.now()}`;
     
@@ -92,15 +94,36 @@ async function handleSubmit(i) {
       manuallyCreated: true // Flag to indicate this was manually created
     };
 
-    saveEvents();
+    // ✅ CRITICAL: Save immediately after creating event
+    const saved = saveEvents();
+    
+    if (!saved) {
+      console.error('❌ CRITICAL: Failed to save newly created event!');
+      console.error(`   Event ID: ${eventId}`);
+      console.error(`   Title: ${title}`);
+      console.error(`   DateTime: ${dt.toISO()}`);
+      
+      // Remove the event from memory since it wasn't saved
+      delete events[eventId];
+      
+      return await i.editReply({
+        content: '❌ Failed to save the event. Please try again or contact an admin if the problem persists.'
+      });
+    }
+
+    console.log(`✅ Created scheduled event: ${title} (ID: ${eventId})`);
+    console.log(`   DateTime: ${dt.toFormat('EEEE, MMMM d, yyyy \'at\' h:mm a')}`);
+    console.log(`   Scheduled: true, ManuallyCreated: true`);
 
     await i.editReply({
       content: `✅ Event scheduled successfully!\n**${title}**\n🕒 ${formatTime(dt.toMillis())}\n\n📝 **Note:** This event is saved to \`scheduled_events.json\` and will appear in \`/weeklyschedule\`.\n\nIt will be automatically posted to Discord at **4 PM EST** on the day before the event, or you can use the \`/post\` command to post it immediately.`
     });
   } catch (err) {
     console.error('❌ Error creating scheduled event:', err);
+    console.error('Error stack:', err.stack);
+    
     await i.editReply({
-      content: '❌ Failed to create scheduled event. Please try again.'
+      content: `❌ Failed to create scheduled event.\n\`\`\`${err.message}\`\`\``
     });
   }
 }
