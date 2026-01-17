@@ -1,132 +1,61 @@
-// src/commands/generate.js
-const { EmbedBuilder } = require('discord.js');
 const { DateTime } = require('luxon');
+const { EmbedBuilder, ButtonBuilder, ButtonStyle, ActionRowBuilder, ComponentType } = require('discord.js');
 const config = require('../../config.json');
 const { hasEventPermission } = require('../utils/helpers');
-const { events, saveEvents } = require('../utils/storage');
-const { isBlackoutDate } = require('../utils/helpers');
+const { generateWeeklySchedule } = require('../services/autoPost');
+const { getEvents } = require('../utils/storage');
 
-/**
- * Get the start of the current week (Monday 00:00)
- */
+// Get the start of the current week (Monday 00:00)
 function getWeekStart(now) {
   const dayOfWeek = now.weekday; // 1 = Monday, 7 = Sunday
   const daysToSubtract = dayOfWeek - 1; // Days since Monday
   return now.minus({ days: daysToSubtract }).startOf('day');
 }
 
-/**
- * Check what events exist for the current week
- */
+// Get all events for the current week
 function getWeekEvents() {
+  const events = getEvents(); // ✅ Get live reference
   const now = DateTime.now().setZone(config.timezone);
   const weekStart = getWeekStart(now);
   const weekEnd = weekStart.plus({ days: 7 });
 
-  const weekEvents = Object.values(events).filter(event => {
+  return Object.values(events).filter(event => {
     if (event.cancelled) return false;
     const eventTime = DateTime.fromMillis(event.datetime).setZone(config.timezone);
     return eventTime >= weekStart && eventTime < weekEnd;
   });
-
-  // Categorize events
-  const scheduled = [];
-  const posted = [];
-
-  weekEvents.forEach(event => {
-    if (event.messageId) {
-      posted.push(event);
-    } else {
-      scheduled.push(event);
-    }
-  });
-
-  return { scheduled, posted, total: weekEvents };
 }
 
-/**
- * Generate weekly schedule (creates event data only, doesn't post to Discord)
- */
-async function generateWeeklySchedule() {
+// Get scheduled events (not yet posted to Discord)
+function getScheduledEvents() {
+  const events = getEvents(); // ✅ Get live reference
   const now = DateTime.now().setZone(config.timezone);
   const weekStart = getWeekStart(now);
+  const weekEnd = weekStart.plus({ days: 7 });
 
-  console.log(`📋 Generating weekly schedule data:`);
-  console.log(`   Week starting: ${weekStart.toFormat('yyyy-MM-dd')}`);
-  console.log(`   Open days: ${config.openDays.join(', ')}`);
-
-  let eventsCreated = 0;
-  const createdEvents = [];
-
-  // Create event data for the next 7 days
-  for (let i = 0; i < 7; i++) {
-    const shiftDate = weekStart.plus({ days: i });
-    const shiftDay = shiftDate.toFormat('EEEE');
-    
-    // Skip if not an open day
-    if (!config.openDays.includes(shiftDay)) {
-      console.log(`⏭️ Skipping ${shiftDay} (not an open day)`);
-      continue;
-    }
-
-    const shiftTime = shiftDate.set({ 
-      hour: config.shiftStartHour, 
-      minute: 0, 
-      second: 0,
-      millisecond: 0
-    });
-
-    const dateKey = shiftTime.toISODate();
-
-    // Check if it's a blackout date
-    if (isBlackoutDate(shiftTime.toMillis())) {
-      console.log(`🚫 Skipping ${dateKey} (blackout date)`);
-      continue;
-    }
-
-    // Check if event already exists for this day
-    const existingEvent = Object.values(events).find(event => {
-      const eventDate = DateTime.fromMillis(event.datetime).setZone(config.timezone);
-      return eventDate.toISODate() === dateKey && !event.cancelled;
-    });
-
-    if (existingEvent) {
-      console.log(`⏭️ Event already exists for ${shiftDay}, ${dateKey}`);
-      continue;
-    }
-
-    // Create unique ID for the event (will be replaced with messageId when posted)
-    const eventId = `scheduled_${Date.now()}_${i}`;
-    
-    const newEvent = {
-      id: eventId,
-      title: `🍸 ${shiftDay} Night Shift`,
-      shift: `${shiftDay} Night Shift`,
-      datetime: shiftTime.toMillis(),
-      channelId: null, // Will be set when posted
-      messageId: null, // Will be set when posted to Discord
-      signups: {},
-      cancelled: false,
-      scheduled: true // Flag to indicate this is scheduled but not yet posted
-    };
-
-    events[eventId] = newEvent;
-    createdEvents.push(newEvent);
-    eventsCreated++;
-    console.log(`✅ Scheduled: ${shiftDay}, ${dateKey} at ${shiftTime.toFormat('h:mm a')}`);
-  }
-
-  if (eventsCreated > 0) {
-    saveEvents();
-    console.log(`💾 Saved ${eventsCreated} scheduled event(s) to scheduled_events.json`);
-  }
-
-  return { eventsCreated, createdEvents };
+  return Object.values(events).filter(event => {
+    if (event.cancelled) return false;
+    if (!event.scheduled || event.messageId) return false; // Must be scheduled and not posted
+    const eventTime = DateTime.fromMillis(event.datetime).setZone(config.timezone);
+    return eventTime >= weekStart && eventTime < weekEnd;
+  });
 }
 
-/**
- * Handle the /generate command
- */
+// Get posted events (already in Discord)
+function getPostedEvents() {
+  const events = getEvents(); // ✅ Get live reference
+  const now = DateTime.now().setZone(config.timezone);
+  const weekStart = getWeekStart(now);
+  const weekEnd = weekStart.plus({ days: 7 });
+
+  return Object.values(events).filter(event => {
+    if (event.cancelled) return false;
+    if (!event.messageId) return false; // Must have been posted to Discord
+    const eventTime = DateTime.fromMillis(event.datetime).setZone(config.timezone);
+    return eventTime >= weekStart && eventTime < weekEnd;
+  });
+}
+
 async function handleGenerate(interaction) {
   try {
     // Check permissions
@@ -141,141 +70,201 @@ async function handleGenerate(interaction) {
 
     const now = DateTime.now().setZone(config.timezone);
     const weekStart = getWeekStart(now);
-    
-    // Check existing events
-    const { scheduled, posted, total } = getWeekEvents();
+    const weekEnd = weekStart.plus({ days: 7 });
+
+    // Get current week's events
+    const weekEvents = getWeekEvents();
+    const scheduledEvents = getScheduledEvents();
+    const postedEvents = getPostedEvents();
 
     // Build status embed
     const statusEmbed = new EmbedBuilder()
       .setColor('#FFA500')
-      .setTitle('📊 Current Week Schedule Status')
-      .setDescription(`Week starting: **${weekStart.toFormat('MMMM d, yyyy')}** (${weekStart.toFormat('EEEE')})`)
+      .setTitle('📋 Weekly Schedule Status')
+      .setDescription(`Current week: **${weekStart.toFormat('MMM d')}** - **${weekEnd.minus({ days: 1 }).toFormat('MMM d, yyyy')}**`)
       .addFields(
-        { 
-          name: '📅 Scheduled (Not Yet Posted)', 
-          value: scheduled.length > 0 
-            ? scheduled.map(e => {
-                const dt = DateTime.fromMillis(e.datetime).setZone(config.timezone);
-                return `• ${dt.toFormat('EEEE, MMM d')} at ${dt.toFormat('h:mm a')}`;
-              }).join('\n')
-            : 'None',
-          inline: false 
-        },
-        { 
-          name: '✅ Posted to Discord', 
-          value: posted.length > 0 
-            ? posted.map(e => {
-                const dt = DateTime.fromMillis(e.datetime).setZone(config.timezone);
-                return `• ${e.title || 'Event'} - ${dt.toFormat('EEEE, MMM d')} at ${dt.toFormat('h:mm a')}`;
-              }).join('\n')
-            : 'None',
-          inline: false 
-        },
-        { 
-          name: '📊 Total Events This Week', 
-          value: `${total.length} event(s)`,
-          inline: false 
+        {
+          name: '📊 Current Status',
+          value: `Total Events: **${weekEvents.length}**\nScheduled (not posted): **${scheduledEvents.length}**\nPosted (in Discord): **${postedEvents.length}**`,
+          inline: false
         },
         {
-          name: '⚙️ Configuration',
-          value: `Open Days: ${config.openDays.join(', ')}\nShift Start Time: ${config.shiftStartHour}:00`,
-          inline: false
+          name: '🗓️ Open Days',
+          value: config.openDays.join(', '),
+          inline: true
+        },
+        {
+          name: '🕒 Shift Start Time',
+          value: `${config.shiftStartHour}:00 (${config.shiftStartHour > 12 ? config.shiftStartHour - 12 : config.shiftStartHour} ${config.shiftStartHour >= 12 ? 'PM' : 'AM'})`,
+          inline: true
         }
       )
       .setTimestamp();
 
-    await interaction.editReply({ embeds: [statusEmbed] });
+    // Show scheduled events if any exist
+    if (scheduledEvents.length > 0) {
+      const scheduledList = scheduledEvents
+        .sort((a, b) => a.datetime - b.datetime)
+        .map(event => {
+          const dt = DateTime.fromMillis(event.datetime).setZone(config.timezone);
+          const eventType = event.manuallyCreated ? '✏️ Manual' : '🤖 Auto';
+          return `${eventType} • ${event.title} - ${dt.toFormat('EEE, MMM d')}`;
+        })
+        .join('\n');
 
-    // Ask for confirmation
-    await interaction.followUp({
-      content: `Would you like to generate the weekly schedule now? This will create event data for all **open days** (${config.openDays.join(', ')}) that don't already exist.\n\n**Note:** Events will be saved to scheduled_events.json but NOT posted to Discord yet.\n\n**Type \`yes\` to confirm or \`no\` to cancel.**`,
-      ephemeral: true
+      statusEmbed.addFields({
+        name: '📅 Scheduled Events (Not Yet Posted)',
+        value: scheduledList.length > 1024 ? scheduledList.substring(0, 1020) + '...' : scheduledList,
+        inline: false
+      });
+    }
+
+    // Show posted events if any exist
+    if (postedEvents.length > 0) {
+      const postedList = postedEvents
+        .sort((a, b) => a.datetime - b.datetime)
+        .map(event => {
+          const dt = DateTime.fromMillis(event.datetime).setZone(config.timezone);
+          return `✅ ${event.title} - ${dt.toFormat('EEE, MMM d')}`;
+        })
+        .join('\n');
+
+      statusEmbed.addFields({
+        name: '✅ Posted Events (In Discord)',
+        value: postedList.length > 1024 ? postedList.substring(0, 1020) + '...' : postedList,
+        inline: false
+      });
+    }
+
+    // Check if schedule already exists
+    if (weekEvents.length > 0) {
+      statusEmbed.addFields({
+        name: '⚠️ Warning',
+        value: `A schedule already exists for this week with **${weekEvents.length}** event(s).\n\nGenerating again will create **duplicate** events. Are you sure you want to continue?`,
+        inline: false
+      });
+    } else {
+      statusEmbed.addFields({
+        name: '✅ Ready',
+        value: 'No schedule exists for this week. Ready to generate!',
+        inline: false
+      });
+    }
+
+    // Create confirmation buttons
+    const confirmButton = new ButtonBuilder()
+      .setCustomId('confirm_generate')
+      .setLabel('✅ Generate Schedule')
+      .setStyle(ButtonStyle.Success);
+
+    const cancelButton = new ButtonBuilder()
+      .setCustomId('cancel_generate')
+      .setLabel('❌ Cancel')
+      .setStyle(ButtonStyle.Secondary);
+
+    const row = new ActionRowBuilder().addComponents(confirmButton, cancelButton);
+
+    const response = await interaction.editReply({
+      embeds: [statusEmbed],
+      components: [row]
     });
 
-    // Wait for confirmation
-    const filter = m => m.author.id === interaction.user.id && ['yes', 'no'].includes(m.content.toLowerCase());
-    
-    try {
-      const collected = await interaction.channel.awaitMessages({ 
-        filter, 
-        max: 1, 
-        time: 30000, 
-        errors: ['time'] 
-      });
+    // Wait for button click
+    const collector = response.createMessageComponentCollector({
+      componentType: ComponentType.Button,
+      time: 60000
+    });
 
-      const response = collected.first().content.toLowerCase();
-
-      if (response === 'no') {
-        return await interaction.followUp({
-          content: '❌ Schedule generation cancelled.',
+    collector.on('collect', async (buttonInteraction) => {
+      if (buttonInteraction.user.id !== interaction.user.id) {
+        return await buttonInteraction.reply({
+          content: '❌ This button is not for you.',
           ephemeral: true
         });
       }
 
-      // Generate schedule
-      await interaction.followUp({
-        content: '🔄 Generating weekly schedule data...',
-        ephemeral: true
-      });
+      await buttonInteraction.deferUpdate();
 
-      const { eventsCreated, createdEvents } = await generateWeeklySchedule();
+      if (buttonInteraction.customId === 'cancel_generate') {
+        // Disable buttons
+        confirmButton.setDisabled(true);
+        cancelButton.setDisabled(true);
 
-      // Get updated count
-      const afterGeneration = getWeekEvents();
-
-      const successEmbed = new EmbedBuilder()
-        .setColor('#00FF00')
-        .setTitle('✅ Weekly Schedule Generated')
-        .setDescription(`Schedule data created for week starting **${weekStart.toFormat('MMMM d, yyyy')}**\n\n**Note:** Events are saved to \`scheduled_events.json\` and will appear in \`/weeklyschedule\`. They will be posted to Discord automatically at their scheduled times.`)
-        .addFields(
-          { 
-            name: '📈 Before', 
-            value: `${total.length} total event(s)`, 
-            inline: true 
-          },
-          { 
-            name: '📊 After', 
-            value: `${afterGeneration.total.length} total event(s)`, 
-            inline: true 
-          },
-          { 
-            name: '➕ New Events', 
-            value: `${eventsCreated} event(s) created`, 
-            inline: true 
-          }
-        );
-
-      if (createdEvents.length > 0) {
-        successEmbed.addFields({
-          name: '📋 Created Events',
-          value: createdEvents.map(e => {
-            const dt = DateTime.fromMillis(e.datetime).setZone(config.timezone);
-            return `• ${dt.toFormat('EEEE, MMM d')} at ${dt.toFormat('h:mm a')}`;
-          }).join('\n'),
-          inline: false
+        await interaction.editReply({
+          content: '❌ Schedule generation cancelled.',
+          embeds: [],
+          components: [row]
         });
+
+        collector.stop();
+        return;
       }
 
-      successEmbed.setTimestamp();
+      if (buttonInteraction.customId === 'confirm_generate') {
+        // Disable buttons
+        confirmButton.setDisabled(true);
+        cancelButton.setDisabled(true);
 
-      await interaction.followUp({ embeds: [successEmbed] });
+        await interaction.editReply({
+          content: '⏳ Generating weekly schedule...',
+          embeds: [],
+          components: [row]
+        });
 
-    } catch (err) {
-      await interaction.followUp({
-        content: '⏱️ Confirmation timed out. Schedule generation cancelled.',
-        ephemeral: true
-      });
-    }
+        // Generate schedule
+        const eventsCreated = await generateWeeklySchedule();
+
+        const resultEmbed = new EmbedBuilder()
+          .setColor(eventsCreated > 0 ? '#00FF00' : '#FFA500')
+          .setTitle(eventsCreated > 0 ? '✅ Schedule Generated' : 'ℹ️ Generation Complete')
+          .setDescription(
+            eventsCreated > 0
+              ? `Successfully created **${eventsCreated}** scheduled event(s) for the week of **${weekStart.toFormat('MMM d, yyyy')}**.`
+              : 'No new events were created. This may be because:\n• Events already exist for all open days\n• All open days are blackout dates\n• The week has already passed'
+          )
+          .setTimestamp();
+
+        if (eventsCreated > 0) {
+          resultEmbed.addFields(
+            {
+              name: '📝 Next Steps',
+              value: '• Events are saved to `scheduled_events.json` 🛡️\n• View them with `/weeklyschedule`\n• They will auto-post at **4 PM EST** daily\n• Or use `/post` to post them immediately',
+              inline: false
+            }
+          );
+        }
+
+        await interaction.editReply({
+          content: null,
+          embeds: [resultEmbed],
+          components: []
+        });
+
+        collector.stop();
+      }
+    });
+
+    collector.on('end', (collected, reason) => {
+      if (reason === 'time') {
+        confirmButton.setDisabled(true);
+        cancelButton.setDisabled(true);
+
+        interaction.editReply({
+          content: '⏱️ Command timed out. Please run `/generate` again if you want to generate the schedule.',
+          components: [row]
+        });
+      }
+    });
 
   } catch (error) {
     console.error('Error in generate command:', error);
     console.error('Error stack:', error.stack);
-    
-    const errorMessage = { 
-      content: `❌ An error occurred while generating the schedule.\n\`\`\`${error.message}\`\`\``, 
-      ephemeral: true 
+
+    const errorMessage = {
+      content: `❌ An error occurred while generating the schedule.\n\`\`\`${error.message}\`\`\``,
+      ephemeral: true
     };
-    
+
     if (interaction.deferred) {
       await interaction.editReply(errorMessage);
     } else {
