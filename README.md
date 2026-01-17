@@ -1,4 +1,4 @@
-# 🎉 Retro Replay Bot Rewrite V2.3.7.1
+# 🎉 Retro Replay Bot - Monolithic Update V1
 
 A comprehensive **Discord.js v14** bot designed for managing bar/club staff scheduling with **emoji-based signups**, **automated shift posting**, **multi-stage backup alerts**, **role management**, and **detailed shift logging**.
 
@@ -13,7 +13,7 @@ Perfect for RP servers, virtual clubs, bars, and any staff-driven community that
 - **Smart restart handling** - Won't post shifts on restart unless within configured hour window
 - Shifts automatically scheduled for configured start hour
 - **Duplicate shift prevention** - Scans last 100 messages to prevent duplicate posts
-- Smart blackout date system to skip closed days
+- Smart blackout date system to skip closed days (supports **DD-MM-YYYY** format)
 - Automatic shift reminders when events start
 - **Multi-stage backup alerts** sent to #staff-chat:
   - 2 hours before shift
@@ -33,7 +33,8 @@ Perfect for RP servers, virtual clubs, bars, and any staff-driven community that
 - **Shift reposting** - Managers can repost latest shift to bump it to top of channel
 - **One role per user** - selecting new role removes old signup
 - Automatic reaction cleanup for disabled roles
-- Date/time format: **DD-MM-YYYY 12HR** (e.g., 15-01-2026 9:00 PM)
+- **Universal date format: DD-MM-YYYY** (e.g., 15-01-2026 for January 15, 2026)
+- Time format: **12-hour with AM/PM** (e.g., 9:00 PM)
 - Manual event creation via modal form with `/createevent`
 
 ### 🎛️ Role Management
@@ -52,10 +53,11 @@ Perfect for RP servers, virtual clubs, bars, and any staff-driven community that
 - **Permission-locked** - Only users with configured eventCreatorRoles can manage status
 
 ### 🗓️ Blackout Date System
-- `/addblackout` - Block specific dates from auto-posting (YYYY-MM-DD format)
-- `/removeblackout` - Unblock dates and resume normal scheduling
-- `/listblackouts` - View all currently blocked dates
+- `/addblackout` - Block specific dates from auto-posting (**DD-MM-YYYY** format)
+- `/removeblackout` - Unblock dates and resume normal scheduling (**DD-MM-YYYY** format)
+- `/listblackouts` - View all currently blocked dates (displays in **DD-MM-YYYY** format)
 - Bot skips blackout dates when posting shifts
+- **Consistent date format** - Uses DD-MM-YYYY format matching all other bot operations
 
 ### 📊 Shift Logging
 - Automatic logging when shifts start
@@ -84,8 +86,6 @@ Perfect for RP servers, virtual clubs, bars, and any staff-driven community that
 
 ### ⚙️ Manager Commands (Restricted)
 
-### ⚙️ Manager Commands (Restricted)
-
 | Command | Description |
 |---------|-------------|
 | `/createevent` | Create a new shift event using modal form |
@@ -94,8 +94,8 @@ Perfect for RP servers, virtual clubs, bars, and any staff-driven community that
 | `/repost` | Repost the latest upcoming shift (deletes old, creates new with signups preserved) |
 | `/enable <role>` | Enable a disabled role for signups (dropdown selection) |
 | `/disable <role>` | Disable a role from signups (dropdown selection) |
-| `/addblackout <date>` | Block a date from auto-posting (format: YYYY-MM-DD) |
-| `/removeblackout <date>` | Unblock a previously blackout date |
+| `/addblackout <date>` | Block a date from auto-posting (format: DD-MM-YYYY) |
+| `/removeblackout <date>` | Unblock a previously blackout date (format: DD-MM-YYYY) |
 | `/listblackouts` | View all currently blocked dates |
 | `/setstatus <status> [type]` | Set custom bot status (optional: Playing/Watching/Listening/Competing) |
 | `/statusclear` | Clear custom status and return to default |
@@ -123,9 +123,37 @@ React with these emojis on shift posts to sign up:
 
 ```
 Retro-Replay-V2/
-├── bot.js                    # Main bot file
+├── index.js                  # Main entry point
 ├── config.json               # Server configuration
 ├── .env                      # Bot credentials (KEEP SECRET!)
+├── src/
+│   ├── client.js            # Discord client initialization
+│   ├── commands/            # Command handlers
+│   │   ├── register.js
+│   │   ├── createEvent.js
+│   │   ├── mySignups.js
+│   │   ├── nextShift.js
+│   │   ├── areWeOpen.js
+│   │   ├── cancelEvent.js
+│   │   ├── editEventTime.js
+│   │   ├── setStatus.js
+│   │   ├── statusClear.js
+│   │   ├── blackout.js
+│   │   ├── roleManagement.js
+│   │   ├── help.js
+│   │   ├── refresh.js
+│   │   └── repost.js
+│   ├── events/              # Event handlers
+│   │   ├── interactionCreate.js
+│   │   ├── reactionAdd.js
+│   │   └── reactionRemove.js
+│   ├── services/            # Background services
+│   │   ├── autoPost.js
+│   │   └── backupAlert.js
+│   └── utils/               # Utility functions
+│       ├── constants.js
+│       ├── helpers.js
+│       └── storage.js
 ├── scheduled_events.json     # Active events (auto-created)
 ├── auto_posted.json          # Daily post tracking (auto-created)
 ├── blackout_dates.json       # Closed dates (auto-created)
@@ -179,8 +207,6 @@ BAR_STAFF_ROLE_ID=role_id_to_ping_for_shifts
 - `autoPostHour` - Hour to check for auto-posting (17 = 5 PM in configured timezone)
 - `shiftStartHour` - Hour shifts start (21 = 9 PM in configured timezone)
 
-**⚠️ REMOVED in V2.3.5:** `autoPostTimezone` is no longer needed - all operations now use the single `timezone` setting.
-
 ---
 
 ## 🚀 Installation & Setup
@@ -214,7 +240,6 @@ BAR_STAFF_ROLE_ID=role_id_to_ping_for_shifts
    - Create `.env` file with your bot token, client ID, channel IDs, and role ID
    - Add `STAFF_CHAT_CHANNEL_ID` for backup alerts
    - Edit `config.json` with your server's settings
-   - **Remove `autoPostTimezone`** from config.json if upgrading from older version
 
 4. **Enable Message Content Intent**
    - Go to [Discord Developer Portal](https://discord.com/developers/applications)
@@ -223,7 +248,7 @@ BAR_STAFF_ROLE_ID=role_id_to_ping_for_shifts
 
 5. **Start the bot**
    ```bash
-   node bot.js
+   node index.js
    ```
 
 ### Required Dependencies
@@ -296,10 +321,11 @@ Missing positions:
 5. **After shift starts** - Event logged to `shift_logs.json`
 
 ### Blackout Dates
-- Use `/addblackout` with format YYYY-MM-DD (e.g., 2026-12-25)
+- Use `/addblackout` with format **DD-MM-YYYY** (e.g., 25-12-2026)
 - Bot skips blackout dates during daily auto-post checks
 - Use `/removeblackout` to re-enable posting on that date
 - Use `/listblackouts` to see all blocked dates
+- **All dates use DD-MM-YYYY format** for consistency
 
 ### Role Management
 - Use `/disable` with dropdown menu to select role to disable
@@ -311,7 +337,7 @@ Missing positions:
 - `/createevent` - Opens modal form to create custom shift event
 - `/cancelevent` - Marks event as cancelled, updates embed to red
 - `/editeventtime` - Updates shift time, reschedules all reminders and alerts, updates timestamps
-- Format dates as **DD-MM-YYYY h:mm AM/PM** (e.g., 25-12-2026 9:00 PM)
+- **All dates use DD-MM-YYYY h:mm AM/PM format** (e.g., 25-12-2026 9:00 PM)
 
 ---
 
@@ -336,7 +362,7 @@ The bot creates and manages several JSON files:
 /createevent
 → Modal opens with three fields:
   • Event Title: "Saturday Special Event"
-  • Date: 25-01-2026
+  • Date: 25-01-2026 (DD-MM-YYYY)
   • Time: 10:00 PM
 → Event created and posted to signup channel
 → All reminders and alerts automatically scheduled
@@ -357,17 +383,19 @@ The bot creates and manages several JSON files:
 
 ### Blocking a Holiday
 ```
-/addblackout date:2026-12-25
+/addblackout date:25-12-2026
 → Christmas Day blocked from auto-posting
 → No shift will be posted on this date
+→ Format: DD-MM-YYYY
 ```
 
 ### Editing a Shift Time
 ```
 /editeventtime messageid:123456789 datetime:25-12-2026 10:00 PM
-→ Shift time updated to 10 PM
+→ Shift time updated to 10 PM on December 25, 2026
 → All reminders and alerts rescheduled (2hr, 5min, start)
 → Embed updated with new time and timestamps
+→ Format: DD-MM-YYYY h:mm AM/PM
 ```
 
 ### Setting Custom Status
@@ -387,7 +415,7 @@ The bot creates and manages several JSON files:
 ### Checking Next Shift
 ```
 /nextshift
-→ Shows next scheduled open day with countdown timer
+→ Shows next scheduled shift with countdown timer
 → Displays shift start time in your local timezone
 → Uses Discord's dynamic timestamp feature
 ```
@@ -396,7 +424,7 @@ The bot creates and manages several JSON files:
 ```
 /areweopen
 → Shows if bar is open today
-→ If not, displays next open day with countdown
+→ If not, displays which days bar is open
 → Displays times in your local timezone
 ```
 
@@ -443,25 +471,26 @@ Use cases:
 ### Managing Blackouts
 ```
 /listblackouts
-→ Shows: • 2026-12-25
-         • 2026-01-01
-         • 2026-07-04
+→ Shows: • 25-12-2026 (2026-12-25)
+         • 01-01-2027 (2027-01-01)
+         • 04-07-2026 (2026-07-04)
 
-/removeblackout date:2026-07-04
+/removeblackout date:04-07-2026
 → July 4th removed from blackout list
 → Shifts will resume posting on this date
+→ Format: DD-MM-YYYY
 ```
 
 ---
 
 ## 📝 Important Notes
 
+- **Date Format:** **ALL dates use DD-MM-YYYY format** throughout the entire bot (e.g., 25-12-2026 = December 25, 2026)
+- **Time Format:** 12-hour format with AM/PM (e.g., 9:00 PM)
 - **Timezone:** All operations use single `timezone` setting from config.json
 - **Discord Timestamps:** Users see times in their local timezone automatically
 - **Auto-posting:** Checks every 10 minutes during configured `autoPostHour`
 - **Shift time:** Uses configured `shiftStartHour` on open days
-- **Date format:** DD-MM-YYYY h:mm AM/PM for all displays and commands
-- **Blackout format:** YYYY-MM-DD for blackout commands only
 - **Data persistence:** All JSON files are critical for operation
 - **One role per shift:** Users can only hold one role per event
 - **Message Content Intent:** Required for reaction handling
@@ -559,84 +588,40 @@ Use cases:
 - Check if bot was restarted - it only posts on restart if within configured hour
 - Ensure server/container timezone doesn't conflict with bot timezone setting
 
+**Wrong date format errors**
+- **All dates must be in DD-MM-YYYY format** (e.g., 25-12-2026, not 12-25-2026)
+- This applies to: `/createevent`, `/editeventtime`, `/addblackout`, `/removeblackout`
+- Day comes first, then month, then year
+- Example: January 15, 2026 = 15-01-2026
+
 ---
 
 ## 📄 Version History
 
-**V2.3.7.1** (Current)
-- **BUGFIX:** Startup auto-post now checks configured hour before posting
-- **BUGFIX:** Manager role pings fixed - Active Manager and Backup Manager now both ping @Head Manager AND @Manager
-- **NEW:** `/repost` command - Repost latest upcoming shift (deletes old, creates new with preserved signups)
-- **NEW:** Enhanced debug logging system:
-  - Logs timezone, config values, and current server time at startup
-  - Hourly diagnostic checks showing target vs current time
-  - Detailed shift creation logging with timestamps
-  - Startup auto-post decision logging
+**Monolithic Update V1** (Current)
+- **COMPLETE REWRITE:** Restructured from monolithic single-file to modular architecture
+- **NEW:** Organized codebase with separate folders for commands, events, services, and utilities
+- **NEW:** Modular command system with individual files for each command
+- **NEW:** Centralized constants and configuration management
+- **NEW:** Improved error handling and logging throughout
+- **CHANGED:** Blackout date format now uses **DD-MM-YYYY** (was YYYY-MM-DD)
+  - `/addblackout` now accepts DD-MM-YYYY format
+  - `/removeblackout` now accepts DD-MM-YYYY format
+  - `/listblackouts` displays dates in DD-MM-YYYY format
+  - Internal storage still uses ISO format (YYYY-MM-DD) for consistency
+- **IMPROVED:** Better code organization and maintainability
+- **IMPROVED:** Enhanced separation of concerns
+- **FIXED:** All existing features from V2.3.7.1 maintained
+- **FIXED:** Startup auto-post checks configured hour before posting
+- **FIXED:** Manager role pings - Active Manager and Backup Manager both ping @Head Manager AND @Manager
+- Enhanced debug logging system with detailed diagnostics
 - Prevents unexpected shift posts when bot restarts outside configured hour window
-- Improved backup alert role mention logic for manager positions
 
-**V2.3.6**
-- **NEW:** `/refresh` command - Manually refresh shift signup embeds (available to all users)
-- Allows anyone to fix embed display issues without manager intervention
-- Refreshes timestamps and signup lists on demand
-- Useful for recovering from display errors or sync issues
-- Added to help command and user command documentation
-
-**V2.3.5**
-- **BREAKING CHANGE:** Unified timezone configuration - removed `autoPostTimezone`
-- **NEW:** All timezone operations now use single `timezone` setting from config.json
-- **NEW:** Discord dynamic timestamps added to shift embeds (shows in user's local timezone)
-- **NEW:** Timestamps include both full date/time and relative countdown
-- **NEW:** Enhanced `/help` command with full command list and parameters
-- **NEW:** Improved permission error messages showing required roles
-- **NEW:** Bot status commands (`/setstatus`, `/statusclear`) now locked to eventCreatorRoles
-- Added unix timestamp and countdown to all shift posts
-- Updated all embed updates to include dynamic timestamps (create, edit, reactions)
-- Improved help embed with command parameters and permission requirements
-- Better user experience with informative error messages
-
-**V2.3.4**
-- **NEW:** Multi-stage backup alert system (2 hours, 5 minutes, at start)
-- **NEW:** Dedicated #staff-chat channel for backup alerts
-- **NEW:** Added `STAFF_CHAT_CHANNEL_ID` to `.env` configuration
-- Backup alerts now include timeframe in message
-- Improved backup alert scheduling with three separate timers
-- Enhanced error handling for staff chat channel access
-- Added staff chat verification on bot startup
-- All three backup alert timers properly cleared on event cancel/reschedule
-- Shift start reminders still sent to signup channel
-
-**V2.3.3**
-- Added `/createevent` command with modal form interface
-- Improved manual event creation workflow
-- Enhanced user experience for custom shift creation
-
-**V2.3.1**
-- Added `/enable` command with dropdown role selection
-- Added `/disable` command with dropdown role selection
-- Added `/help` command with comprehensive command list and categories
-- Implemented `checkForDuplicateShift()` function to prevent duplicate shift posts
-- Added duplicate checking in auto-post workflow (scans last 100 messages)
-- Improved fail-safe handling for duplicate detection
-- Auto-marks dates as posted when duplicates are detected
-- Enhanced role management with intuitive dropdown menus
-- Added detailed help embed organized by command categories
-
-**V2.3.0**
-- Changed auto-posting from weekly to daily
-- Added `/addblackout`, `/removeblackout`, `/listblackouts` commands
-- Added `/setstatus` and `/statusclear` commands
-- Implemented dynamic bot status system
-- Changed to one role per user per shift (auto-removes previous role)
-- Fixed config to use `.env` for channel and role IDs
-- Improved reaction handling with DM notifications
-- Standardized date format to DD-MM-YYYY 12HR throughout
-- Added automatic shift logging when events start
-
-**V2.1.3**
-- Weekly shift posting system
-- Multi-role signups per user
-- Basic role disable/enable system
+**Previous Monolithic Version (V2.3.7.1)**
+- Startup auto-post hour checking
+- Manager role ping improvements
+- `/repost` command
+- Enhanced debug logging
 
 ---
 
@@ -658,4 +643,6 @@ For support, questions, or feature requests, please open an issue on GitHub or c
 
 ---
 
-**Retro Replay Bot Rewrite V2.3.7.1** - Making shift management effortless 🎉
+**Retro Replay Bot - Monolithic Update V1** - Making shift management effortless 🎉
+
+**📅 Universal Date Format: DD-MM-YYYY** - All dates throughout the bot use Day-Month-Year format for consistency.
