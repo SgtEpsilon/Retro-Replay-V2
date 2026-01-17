@@ -10,7 +10,7 @@ require('dotenv').config();
 const { client } = require('./src/client');
 const { registerCommands } = require('./src/commands/register');
 const { loadData, scheduleReminder, scheduleBackupAlert, getEvents } = require('./src/utils/storage');
-const { scheduleAutoPost, autoPostWeeklyShifts } = require('./src/services/autoPost');
+const { scheduleAutoPost, checkAndGenerateSchedule, checkAndPostScheduledEvents } = require('./src/services/autoPost');
 const { setDefaultStatus } = require('./src/utils/helpers');
 const { DateTime } = require('luxon');
 const config = require('./config.json');
@@ -103,18 +103,18 @@ client.once('ready', async () => {
   console.log('💾 Auto-save enabled (every 5 minutes)');
   
   // Initial check 5 seconds after startup
-  setTimeout(() => {
+  setTimeout(async () => {
     const now = DateTime.now().setZone(config.timezone);
     console.log(`\n🔍 Initial auto-post check at startup:`);
     console.log(`   Current time: ${now.toFormat('yyyy-MM-dd HH:mm:ss z')}`);
     console.log(`   Current hour: ${now.hour} | Target hour: ${config.autoPostHour}`);
-    console.log(`   Will run: ${now.hour === config.autoPostHour && now.minute < 10 ? 'YES' : 'NO'}\n`);
     
-    if (now.hour === config.autoPostHour && now.minute < 10) {
-      autoPostWeeklyShifts(client);
-    } else {
-      console.log(`⏭️ Skipping auto-post at startup - not within configured hour window`);
-    }
+    // Check if we should generate schedule
+    await checkAndGenerateSchedule(client);
+    
+    // Check if we should post scheduled events
+    await checkAndPostScheduledEvents(client);
+    
   }, 5000);
 });
 

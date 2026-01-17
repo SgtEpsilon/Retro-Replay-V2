@@ -306,5 +306,6 @@ module.exports = {
   generateWeeklySchedule,
   scheduleAutoPost,
   checkAndGenerateSchedule,
+  checkAndPostScheduledEvents,
   postScheduledEvents
 };

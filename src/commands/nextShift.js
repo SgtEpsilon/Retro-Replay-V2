@@ -1,7 +1,9 @@
-const { events } = require('../utils/storage');
+const { getEvents } = require('../utils/storage');
 const { formatTime } = require('../utils/helpers');
 
 async function nextShiftHandler(i) {
+  const events = getEvents(); // ✅ Get live reference
+  
   const upcoming = Object.values(events)
     .filter(ev => !ev.cancelled && ev.datetime > Date.now())
     .sort((a, b) => a.datetime - b.datetime);
