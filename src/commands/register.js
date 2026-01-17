@@ -57,21 +57,21 @@ const commands = [
     .setName('statusclear')
     .setDescription('Clear custom status and return to default'),
 
-  new SlashCommandBuilder()
-    .setName('addblackout')
-    .setDescription('Add a blackout date (no shifts)')
-    .addStringOption(o =>
-      o.setName('date')
-        .setDescription('Date (YYYY-MM-DD)')
-        .setRequired(true)),
+new SlashCommandBuilder()
+  .setName('addblackout')
+  .setDescription('Add a blackout date (no shifts)')
+  .addStringOption(o =>
+    o.setName('date')
+      .setDescription('Date (MM-DD-YYYY)')  // Changed from YYYY-MM-DD
+      .setRequired(true)),
 
-  new SlashCommandBuilder()
-    .setName('removeblackout')
-    .setDescription('Remove a blackout date')
-    .addStringOption(o =>
-      o.setName('date')
-        .setDescription('Date (YYYY-MM-DD)')
-        .setRequired(true)),
+new SlashCommandBuilder()
+  .setName('removeblackout')
+  .setDescription('Remove a blackout date')
+  .addStringOption(o =>
+    o.setName('date')
+      .setDescription('Date (MM-DD-YYYY)')  // Changed from YYYY-MM-DD
+      .setRequired(true)),
 
   new SlashCommandBuilder()
     .setName('listblackouts')
