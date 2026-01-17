@@ -332,7 +332,6 @@ function scheduleReminder(id) {
   reminderTimers[id] = setTimeout(async () => {
     try {
       const channel = await client.channels.fetch(ev.channelId);
-      await channel.send(`🔔 **Shift starting now!** <@&${BAR_STAFF_ROLE_ID}>`);
       shiftLogs.push({ ...ev, timestamp: Date.now() });
       save(SHIFT_LOG_FILE, shiftLogs);
     } catch (err) {
@@ -404,32 +403,33 @@ async function sendBackupAlert(ev, timeframe) {
     
     const roleMentions = [];
     for (const missingRole of missing) {
-      let discordRole = null;
-      
-      if (missingRole === 'Backup Manager' || missingRole === 'Active Manager') {
-        // For both manager roles, ping Head Manager and Manager
-        const headManager = guild.roles.cache.find(r => r.name.toLowerCase() === 'head manager');
-        const manager = guild.roles.cache.find(r => r.name.toLowerCase() === 'manager');
-        
-        if (headManager) roleMentions.push(`<@&${headManager.id}>`);
-        if (manager) roleMentions.push(`<@&${manager.id}>`);
-        
-        // If neither found, show the role name
-        if (!headManager && !manager) {
-          roleMentions.push(`**${missingRole}**`);
-        }
-      } else {
-        discordRole = guild.roles.cache.find(r => 
-          r.name.toLowerCase() === missingRole.toLowerCase()
-        );
-        
-        if (discordRole) {
-          roleMentions.push(`<@&${discordRole.id}>`);
-        } else {
-          roleMentions.push(`**${missingRole}**`);
-        }
-      }
+  if (missingRole === 'Active Manager' || missingRole === 'Backup Manager') {
+    // Managers ping Head Manager + Manager
+    const headManager = guild.roles.cache.find(
+      r => r.name.toLowerCase() === 'head manager'
+    );
+    const manager = guild.roles.cache.find(
+      r => r.name.toLowerCase() === 'manager'
+    );
+
+    if (headManager) roleMentions.push(`<@&${headManager.id}>`);
+    if (manager) roleMentions.push(`<@&${manager.id}>`);
+
+  } else {
+    // All other roles ping themselves
+    const role = guild.roles.cache.find(
+      r => r.name.toLowerCase() === missingRole.toLowerCase()
+    );
+
+    if (role) {
+      roleMentions.push(`<@&${role.id}>`);
+    } else {
+      // Fallback if role not found
+      roleMentions.push(`**${missingRole}**`);
     }
+  }
+}
+
     
     await staffChannel.send(
       `⚠️ **BACKUP NEEDED** (${timeframe}) for ${ev.title}\nMissing positions:\n${roleMentions.join('\n')}`
