@@ -1,12 +1,10 @@
 const { DateTime } = require('luxon');
+const config = require('../../config.json');
 const { 
   TIMEZONE, 
-  AUTO_POST_HOUR, 
-  SHIFT_START_HOUR, 
   SIGNUP_CHANNEL, 
   BAR_STAFF_ROLE_ID,
-  roleConfig,
-  config
+  roleConfig
 } = require('../utils/constants');
 const { 
   events, 
@@ -18,41 +16,31 @@ const {
 } = require('../utils/storage');
 const { isBlackoutDate, createEventEmbed } = require('../utils/helpers');
 
-// Check for duplicate shift
-async function checkForDuplicateShift(channel, shiftDate, client) {
-  try {
-    const messages = await channel.messages.fetch({ limit: 100 });
-    const shiftDay = DateTime.fromMillis(shiftDate).setZone(TIMEZONE).toFormat('EEEE');
-    const expectedTitle = `🍸 ${shiftDay} Night Shift`;
-    
-    for (const [id, message] of messages) {
-      if (message.author.id === client.user.id && message.embeds.length > 0) {
-        const embed = message.embeds[0];
-        
-        if (embed.title === expectedTitle) {
-          const existingEvent = events[id];
-          if (existingEvent && !existingEvent.cancelled) {
-            const existingDate = DateTime.fromMillis(existingEvent.datetime).setZone(TIMEZONE).toISODate();
-            const newDate = DateTime.fromMillis(shiftDate).setZone(TIMEZONE).toISODate();
-            
-            if (existingDate === newDate) {
-              console.log(`✅ Shift for ${shiftDay} (${newDate}) already exists (Message ID: ${id})`);
-              return true;
-            }
-          }
-        }
-      }
-    }
-    
-    return false;
-  } catch (err) {
-    console.error('⚠️ Error checking for duplicate shift:', err.message);
-    return false;
-  }
+// Get the start of the current week (Monday 00:00)
+function getWeekStart(now) {
+  const dayOfWeek = now.weekday; // 1 = Monday, 7 = Sunday
+  const daysToSubtract = dayOfWeek - 1; // Days since Monday
+  return now.minus({ days: daysToSubtract }).startOf('day');
 }
 
-// Auto-post weekly shifts
-async function autoPostWeeklyShifts(client) {
+// Check if we have a schedule for the current week
+function hasScheduleForCurrentWeek() {
+  const now = DateTime.now().setZone(TIMEZONE);
+  const weekStart = getWeekStart(now);
+  const weekEnd = weekStart.plus({ days: 7 });
+
+  // Check if we have any events scheduled for this week
+  const weekEvents = Object.values(events).filter(event => {
+    if (event.cancelled) return false;
+    const eventTime = DateTime.fromMillis(event.datetime).setZone(TIMEZONE);
+    return eventTime >= weekStart && eventTime < weekEnd;
+  });
+
+  return weekEvents.length > 0;
+}
+
+// Post scheduled events to Discord
+async function postScheduledEvents(client) {
   try {
     if (!SIGNUP_CHANNEL) {
       console.error('❌ SIGNUP_CHANNEL_ID not configured in .env');
@@ -75,106 +63,228 @@ async function autoPostWeeklyShifts(client) {
     }
 
     const now = DateTime.now().setZone(TIMEZONE);
-    const today = now.toFormat('EEEE');
-    const dateKey = now.toISODate();
+    let eventsPosted = 0;
 
-    if (!config.openDays.includes(today)) {
-      console.log(`⏭️ Today (${today}) is not an open day, skipping auto-post.`);
+    console.log(`📤 Checking for scheduled events to post...`);
+
+    // Find all scheduled events that haven't been posted yet
+    const scheduledEvents = Object.entries(events).filter(([id, event]) => {
+      return event.scheduled === true && !event.messageId && !event.cancelled;
+    });
+
+    if (scheduledEvents.length === 0) {
+      console.log(`   No scheduled events to post.`);
       return;
     }
 
-    if (autoPosted[dateKey]) {
-      console.log(`✅ Already auto-posted for ${dateKey}`);
-      return;
+    console.log(`   Found ${scheduledEvents.length} scheduled event(s) to post`);
+
+    for (const [eventId, event] of scheduledEvents) {
+      try {
+        const eventDate = DateTime.fromMillis(event.datetime).setZone(TIMEZONE);
+        console.log(`   Posting: ${event.title} for ${eventDate.toFormat('EEEE, MMM d')}`);
+
+        // Initialize signups if not present
+        if (!event.signups || Object.keys(event.signups).length === 0) {
+          event.signups = Object.fromEntries(
+            Object.values(roleConfig).map(role => [role, []])
+          );
+        }
+
+        const embed = createEventEmbed(event.title, event.datetime, event.signups);
+
+        const msg = await channel.send({ 
+          content: `<@&${BAR_STAFF_ROLE_ID}> New shift posted!`,
+          embeds: [embed] 
+        });
+
+        for (const emoji of Object.keys(roleConfig)) {
+          await msg.react(emoji);
+        }
+
+        // Update the event with Discord message info
+        delete events[eventId]; // Remove old entry with scheduled ID
+        
+        events[msg.id] = {
+          ...event,
+          id: msg.id,
+          messageId: msg.id,
+          channelId: channel.id,
+          scheduled: false // No longer just scheduled
+        };
+
+        scheduleReminder(msg.id, client);
+        scheduleBackupAlert(msg.id, client);
+
+        eventsPosted++;
+        console.log(`   ✅ Posted successfully (Message ID: ${msg.id})`);
+
+        // Add a small delay between posts to avoid rate limiting
+        await new Promise(resolve => setTimeout(resolve, 1000));
+
+      } catch (err) {
+        console.error(`   ❌ Error posting event ${eventId}:`, err.message);
+      }
     }
 
-    if (isBlackoutDate(now.toMillis())) {
-      console.log(`🚫 Today (${dateKey}) is a blackout date, skipping auto-post.`);
-      return;
+    if (eventsPosted > 0) {
+      saveEvents();
+      console.log(`✅ Posted ${eventsPosted} scheduled event(s) to Discord`);
     }
 
-    const shiftTime = now.set({ 
-      hour: SHIFT_START_HOUR, 
+  } catch (err) {
+    console.error('❌ Error posting scheduled events:', err);
+  }
+}
+
+// Check and post scheduled events (runs at 4 PM EST)
+async function checkAndPostScheduledEvents(client) {
+  const now = DateTime.now().setZone(TIMEZONE);
+  const isPostTime = now.hour === 16; // 4 PM (16:00)
+  
+  if (isPostTime && now.minute < 10) {
+    console.log(`🕓 4 PM posting time reached - checking for scheduled events`);
+    await postScheduledEvents(client);
+  }
+}
+
+// Generate weekly schedule data (creates event entries, doesn't post to Discord)
+async function generateWeeklySchedule() {
+  const now = DateTime.now().setZone(TIMEZONE);
+  const weekStart = getWeekStart(now);
+
+  console.log(`📋 Generating weekly schedule data:`);
+  console.log(`   Week starting: ${weekStart.toFormat('yyyy-MM-dd')}`);
+  console.log(`   Open days: ${config.openDays.join(', ')}`);
+
+  let eventsCreated = 0;
+
+  // Create event data for the next 7 days
+  for (let i = 0; i < 7; i++) {
+    const shiftDate = weekStart.plus({ days: i });
+    const shiftDay = shiftDate.toFormat('EEEE');
+    
+    // Skip if not an open day
+    if (!config.openDays.includes(shiftDay)) {
+      console.log(`⏭️ Skipping ${shiftDay} (not an open day)`);
+      continue;
+    }
+
+    const shiftTime = shiftDate.set({ 
+      hour: config.shiftStartHour, 
       minute: 0, 
       second: 0,
       millisecond: 0
     });
 
-    console.log(`📋 Creating shift for ${today}:`);
-    console.log(`   Current time: ${now.toFormat('yyyy-MM-dd HH:mm:ss z')}`);
-    console.log(`   Shift time: ${shiftTime.toFormat('yyyy-MM-dd HH:mm:ss z')}`);
-    console.log(`   Shift start hour from config: ${SHIFT_START_HOUR}`);
+    const dateKey = shiftTime.toISODate();
 
-    const isDuplicate = await checkForDuplicateShift(channel, shiftTime.toMillis(), client);
-    if (isDuplicate) {
-      console.log(`⏭️ Shift for ${today} (${dateKey}) already posted, skipping duplicate.`);
-      autoPosted[dateKey] = Date.now();
-      saveAutoPosted();
-      return;
+    // Check if it's a blackout date
+    if (isBlackoutDate(shiftTime.toMillis())) {
+      console.log(`🚫 Skipping ${dateKey} (blackout date)`);
+      continue;
     }
 
-    const title = `🍸 ${today} Night Shift`;
-    const signups = Object.fromEntries(
-      Object.values(roleConfig).map(role => [role, []])
-    );
-
-    const embed = createEventEmbed(title, shiftTime.toMillis(), signups);
-
-    const msg = await channel.send({ 
-      content: `<@&${BAR_STAFF_ROLE_ID}> New shift posted!`,
-      embeds: [embed] 
+    // Check if event already exists for this day
+    const existingEvent = Object.values(events).find(event => {
+      const eventDate = DateTime.fromMillis(event.datetime).setZone(TIMEZONE);
+      return eventDate.toISODate() === dateKey && !event.cancelled;
     });
 
-    for (const emoji of Object.keys(roleConfig)) {
-      await msg.react(emoji);
+    if (existingEvent) {
+      console.log(`⏭️ Event already exists for ${shiftDay}, ${dateKey}`);
+      continue;
     }
 
-    events[msg.id] = {
-      id: msg.id,
-      title,
+    // Create unique ID for the event
+    const eventId = `scheduled_${Date.now()}_${i}`;
+    
+    events[eventId] = {
+      id: eventId,
+      title: `🍸 ${shiftDay} Night Shift`,
+      shift: `${shiftDay} Night Shift`,
       datetime: shiftTime.toMillis(),
-      channelId: channel.id,
-      signups,
-      cancelled: false
+      channelId: null,
+      messageId: null,
+      signups: {},
+      cancelled: false,
+      scheduled: true
     };
 
-    scheduleReminder(msg.id, client);
-    scheduleBackupAlert(msg.id, client);
+    eventsCreated++;
+    console.log(`✅ Scheduled: ${shiftDay}, ${dateKey} at ${shiftTime.toFormat('h:mm a')}`);
+  }
 
+  if (eventsCreated > 0) {
     saveEvents();
     
-    autoPosted[dateKey] = Date.now();
+    // Mark this week as having schedule data created
+    const weekKey = weekStart.toISODate();
+    autoPosted[weekKey] = Date.now();
     saveAutoPosted();
+    
+    console.log(`💾 Saved ${eventsCreated} scheduled event(s) to scheduled_events.json`);
+    console.log(`   Week starting: ${weekKey}`);
+  }
 
-    console.log(`✅ Auto-posted shift for ${today}, ${dateKey}`);
-  } catch (err) {
-    console.error('❌ Auto-post error:', err);
+  return eventsCreated;
+}
+
+// Check if schedule needs to be generated
+async function checkAndGenerateSchedule(client) {
+  const now = DateTime.now().setZone(TIMEZONE);
+  const isMonday = now.weekday === 1; // 1 = Monday
+  const isMidnight = now.hour === 0;
+  
+  // Check if we already have a schedule for this week
+  if (hasScheduleForCurrentWeek()) {
+    if (isMonday && isMidnight && now.minute < 10) {
+      console.log(`✅ Schedule already exists for this week, skipping generation.`);
+    }
+    return;
+  }
+
+  // Generate schedule if:
+  // 1. It's Monday at midnight (preferred time)
+  // 2. OR no schedule exists for the current week (catch-up)
+  if ((isMonday && isMidnight && now.minute < 10) || !hasScheduleForCurrentWeek()) {
+    console.log(`🔄 Generating weekly schedule...`);
+    console.log(`   Reason: ${isMonday && isMidnight ? 'Monday midnight scheduled generation' : 'No schedule exists for current week'}`);
+    await generateWeeklySchedule();
   }
 }
 
-// Schedule auto-post
+// Schedule hourly checks
 function scheduleAutoPost(client) {
   console.log(`⏰ Auto-post scheduler started`);
   console.log(`   Timezone: ${TIMEZONE}`);
-  console.log(`   Auto-post hour: ${AUTO_POST_HOUR}`);
-  console.log(`   Shift start hour: ${SHIFT_START_HOUR}`);
+  console.log(`   Schedule generation: Monday 00:00 (midnight)`);
+  console.log(`   Event posting: Daily 16:00 (4 PM EST)`);
+  console.log(`   Shift start hour: ${config.shiftStartHour}`);
+  console.log(`   Open days: ${config.openDays.join(', ')}`);
   console.log(`   Current time: ${DateTime.now().setZone(TIMEZONE).toFormat('yyyy-MM-dd HH:mm:ss z')}`);
   
+  // Check every 10 minutes
   setInterval(async () => {
     const now = DateTime.now().setZone(TIMEZONE);
     
+    // Log hourly checks
     if (now.minute === 0) {
-      console.log(`🕐 Hourly check - Current time: ${now.toFormat('HH:mm z')} | Looking for hour: ${AUTO_POST_HOUR}`);
+      console.log(`🕐 Hourly check - ${now.toFormat('EEEE HH:mm z')}`);
     }
     
-    if (now.hour === AUTO_POST_HOUR && now.minute < 10) {
-      console.log(`✅ Auto-post hour reached! Running auto-post at ${now.toFormat('yyyy-MM-dd HH:mm:ss z')}`);
-      await autoPostWeeklyShifts(client);
-    }
-  }, 10 * 60 * 1000);
+    // Check if schedule needs to be generated (Monday midnight)
+    await checkAndGenerateSchedule(client);
+    
+    // Check if scheduled events need to be posted (4 PM daily)
+    await checkAndPostScheduledEvents(client);
+    
+  }, 10 * 60 * 1000); // Check every 10 minutes
 }
 
 module.exports = {
-  autoPostWeeklyShifts,
-  scheduleAutoPost
+  generateWeeklySchedule,
+  scheduleAutoPost,
+  checkAndGenerateSchedule,
+  postScheduledEvents
 };

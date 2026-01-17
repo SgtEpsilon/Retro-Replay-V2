@@ -5,10 +5,9 @@ const {
   TextInputStyle,
   ActionRowBuilder
 } = require('discord.js');
-const { hasEventPermission, formatTime, createEventEmbed } = require('../utils/helpers');
-const { events, saveEvents, scheduleReminder, scheduleBackupAlert } = require('../utils/storage');
-const { TIMEZONE, SIGNUP_CHANNEL, BAR_STAFF_ROLE_ID, roleConfig } = require('../utils/constants');
-const { client } = require('../client');
+const { hasEventPermission, formatTime } = require('../utils/helpers');
+const { events, saveEvents } = require('../utils/storage');
+const { TIMEZONE } = require('../utils/constants');
 
 async function showModal(i) {
   if (!hasEventPermission(i.member))
@@ -76,43 +75,32 @@ async function handleSubmit(i) {
   await i.deferReply({ ephemeral: true });
 
   try {
-    const channel = await client.channels.fetch(SIGNUP_CHANNEL);
+    // Create unique ID for the scheduled event
+    const eventId = `scheduled_manual_${Date.now()}`;
     
-    const signups = Object.fromEntries(
-      Object.values(roleConfig).map(role => [role, []])
-    );
-
-    const embed = createEventEmbed(title, dt.toMillis(), signups);
-
-    const msg = await channel.send({
-      content: `<@&${BAR_STAFF_ROLE_ID}> New shift posted!`,
-      embeds: [embed]
-    });
-
-    for (const emoji of Object.keys(roleConfig)) {
-      await msg.react(emoji);
-    }
-
-    events[msg.id] = {
-      id: msg.id,
+    // Create the event data (scheduled, not posted to Discord)
+    events[eventId] = {
+      id: eventId,
       title,
+      shift: title,
       datetime: dt.toMillis(),
-      channelId: channel.id,
-      signups,
-      cancelled: false
+      channelId: null,
+      messageId: null,
+      signups: {},
+      cancelled: false,
+      scheduled: true,
+      manuallyCreated: true // Flag to indicate this was manually created
     };
 
-    scheduleReminder(msg.id, client);
-    scheduleBackupAlert(msg.id, client);
     saveEvents();
 
     await i.editReply({
-      content: `✅ Event created successfully!\n**${title}**\n🕒 ${formatTime(dt.toMillis())}\n📍 Message ID: ${msg.id}`
+      content: `✅ Event scheduled successfully!\n**${title}**\n🕒 ${formatTime(dt.toMillis())}\n\n📝 **Note:** This event is saved to \`scheduled_events.json\` and will appear in \`/weeklyschedule\`.\n\nIt will be automatically posted to Discord at **4 PM EST** on the day before the event, or you can use the \`/post\` command to post it immediately.`
     });
   } catch (err) {
-    console.error('❌ Error creating event:', err);
+    console.error('❌ Error creating scheduled event:', err);
     await i.editReply({
-      content: '❌ Failed to create event. Check bot permissions in the signup channel.'
+      content: '❌ Failed to create scheduled event. Please try again.'
     });
   }
 }

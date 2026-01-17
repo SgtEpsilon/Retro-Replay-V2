@@ -57,21 +57,21 @@ const commands = [
     .setName('statusclear')
     .setDescription('Clear custom status and return to default'),
 
-new SlashCommandBuilder()
-  .setName('addblackout')
-  .setDescription('Add a blackout date (no shifts)')
-  .addStringOption(o =>
-    o.setName('date')
-      .setDescription('Date (MM-DD-YYYY)')  // Changed from YYYY-MM-DD
-      .setRequired(true)),
+  new SlashCommandBuilder()
+    .setName('addblackout')
+    .setDescription('Add a blackout date (no shifts)')
+    .addStringOption(o =>
+      o.setName('date')
+        .setDescription('Date (MM-DD-YYYY)')
+        .setRequired(true)),
 
-new SlashCommandBuilder()
-  .setName('removeblackout')
-  .setDescription('Remove a blackout date')
-  .addStringOption(o =>
-    o.setName('date')
-      .setDescription('Date (MM-DD-YYYY)')  // Changed from YYYY-MM-DD
-      .setRequired(true)),
+  new SlashCommandBuilder()
+    .setName('removeblackout')
+    .setDescription('Remove a blackout date')
+    .addStringOption(o =>
+      o.setName('date')
+        .setDescription('Date (MM-DD-YYYY)')
+        .setRequired(true)),
 
   new SlashCommandBuilder()
     .setName('listblackouts')
@@ -121,9 +121,20 @@ new SlashCommandBuilder()
 
   new SlashCommandBuilder()
     .setName('repost')
-    .setDescription('Repost the latest upcoming shift event')
-];
+    .setDescription('Repost the latest upcoming shift event'),
 
+new SlashCommandBuilder()
+    .setName('weeklyschedule')
+    .setDescription('View all events scheduled for the next 7 days'),
+
+new SlashCommandBuilder()
+    .setName('generate')
+    .setDescription('Manually generate the weekly shift schedule'),
+
+  new SlashCommandBuilder()
+    .setName('post')
+    .setDescription('Post scheduled events to Discord')
+];
 async function registerCommands() {
   const rest = new REST({ version: '10' }).setToken(TOKEN);
 

@@ -12,6 +12,9 @@ const roleHandlers = require('../commands/roleManagement');
 const helpHandler = require('../commands/help');
 const refreshHandler = require('../commands/refresh');
 const repostHandler = require('../commands/repost');
+const weeklyScheduleHandler = require('../commands/weeklySchedule');
+const generateHandler = require('../commands/generate');
+const postHandler = require('../commands/post');
 
 client.on('interactionCreate', async i => {
   try {
@@ -58,6 +61,12 @@ client.on('interactionCreate', async i => {
         return await refreshHandler(i);
       case 'repost':
         return await repostHandler(i);
+      case 'weeklyschedule':
+        return await weeklyScheduleHandler.handleWeeklySchedule(i);
+      case 'generate':
+        return await generateHandler(i);
+      case 'post':
+        return await postHandler(i);;
     }
 
   } catch (err) {

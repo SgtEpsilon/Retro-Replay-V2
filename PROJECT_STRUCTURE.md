@@ -32,6 +32,9 @@ retro-replay-bot/
     │   ├── createEvent.js           # /createevent
     │   ├── mySignups.js             # /mysignups
     │   ├── nextShift.js             # /nextshift
+    │   ├── weeklySchedule.js        # /weeklyschedule
+    │   ├── generate.js              # /generate
+    │   ├── post.js                  # /post
     │   ├── areWeOpen.js             # /areweopen
     │   ├── cancelEvent.js           # /cancelevent
     │   ├── editEventTime.js         # /editeventtime
@@ -59,6 +62,13 @@ retro-replay-bot/
 - Registers event handlers
 - Starts auto-post scheduler
 
+**config.json**
+- Open days configuration (days the bar is open)
+- Event creator roles (permissions for manual event management)
+- Timezone settings
+- Auto-post hour (when to generate weekly schedule)
+- Shift start hour (what time shifts begin)
+
 **src/client.js**
 - Creates and exports Discord client instance
 - Configures intents and partials
@@ -76,9 +86,10 @@ retro-replay-bot/
 - Timer management (reminders, alerts)
 - CRUD operations for events
 - Load/save functions
+- In-memory storage objects (events, autoPosted, blackoutDates, etc.)
 
 **src/utils/helpers.js**
-- Permission checking
+- Permission checking (`hasEventPermission`)
 - Time formatting
 - Blackout date validation
 - Embed building
@@ -87,10 +98,12 @@ retro-replay-bot/
 ### Services
 
 **src/services/autoPost.js**
-- Automated shift posting
+- **Weekly schedule data generation** - Creates event data for the entire week (Monday 00:00)
+- **Scheduled event posting** - Posts scheduled events to Discord (Daily 4 PM EST)
+- **Open day filtering** - Only creates shifts for days in config.json openDays
+- **Hourly checks** - Verifies schedule exists, generates if missing, posts scheduled events
 - Duplicate detection
-- Schedule management
-- Open day validation
+- Blackout date validation
 
 **src/services/backupAlert.js**
 - Backup position alerts
@@ -101,9 +114,12 @@ retro-replay-bot/
 
 Each command file exports a handler function or object:
 
-**createEvent.js** - Modal-based event creation
+**createEvent.js** - Modal-based event creation (saves as scheduled, not posted immediately)
 **mySignups.js** - User signup lookup
 **nextShift.js** - Next shift display
+**weeklySchedule.js** - View all events for the next 7 days (shows both scheduled and posted)
+**generate.js** - Manually generate weekly schedule data (saves to scheduled_events.json)
+**post.js** - Manually post scheduled events to Discord (interactive select menu, restricted to eventCreatorRoles)
 **areWeOpen.js** - Open day checker
 **cancelEvent.js** - Event cancellation
 **editEventTime.js** - Time editing
@@ -113,7 +129,7 @@ Each command file exports a handler function or object:
 **roleManagement.js** - Enable/disable roles
 **help.js** - Command documentation
 **refresh.js** - Embed refresh
-**repost.js** - Event reposting
+**repost.js** - Event reposting (only works with posted events, restricted to eventCreatorRoles)
 
 ### Events
 
@@ -160,17 +176,78 @@ commands/*
   ├── utils/constants.js
   └── client.js
 
-services/*
+services/autoPost.js
+  ├── config.json (direct import)
+  ├── utils/constants.js
+  ├── utils/storage.js
+  └── utils/helpers.js
+
+services/backupAlert.js
   ├── utils/helpers.js
   ├── utils/storage.js
   └── utils/constants.js
 ```
 
+## How The System Works
+
+### Event Scheduling Flow
+
+1. **Schedule Generation (Monday 00:00)**
+   - Bot creates event data for the entire week
+   - Events saved to `scheduled_events.json` with `scheduled: true` flag
+   - Events have no `messageId` (not posted to Discord yet)
+   - Events appear in `/weeklyschedule` command
+
+2. **Event Posting (Daily 4 PM EST)**
+   - Bot checks for events with `scheduled: true` and no `messageId`
+   - Posts those events to Discord channel
+   - Updates events with Discord `messageId`
+   - Sets `scheduled: false`
+   - Sets up reactions and timers
+
+3. **Manual Operations**
+   - `/createevent` - Creates a single scheduled event (not posted immediately)
+   - `/generate` - Manually triggers weekly schedule generation
+   - `/post` - Manually posts scheduled events before 4 PM (interactive menu)
+   - `/weeklyschedule` - View all upcoming events (scheduled and posted)
+   - `/repost` - Reposts an already-posted event (creates new message)
+
+### Event States
+
+- **Scheduled** - `scheduled: true`, `messageId: null` (in JSON, not in Discord)
+- **Posted** - `scheduled: false`, `messageId: "123456"` (in Discord with reactions)
+- **Cancelled** - `cancelled: true` (soft delete)
+
+### Permissions
+
+Commands restricted to `eventCreatorRoles` (Owner, Head Manager, Manager):
+- `/createevent`
+- `/generate`
+- `/post`
+- `/cancelevent`
+- `/editeventtime`
+- `/repost`
+- `/setstatus`
+- `/statusclear`
+- `/addblackout`
+- `/removeblackout`
+- `/enable`
+- `/disable`
+- `/refresh`
+
+Public commands (any user):
+- `/mysignups`
+- `/nextshift`
+- `/weeklyschedule`
+- `/areweopen`
+- `/listblackouts`
+- `/help`
+
 ## Installation
 
 1. Install dependencies: `npm install`
-2. Configure `.env` file
-3. Configure `config.json`
+2. Configure `.env` file with Discord tokens and channel IDs
+3. Configure `config.json` with open days, timezone, and hours
 4. Run: `node index.js`
 
 ## Adding New Commands
@@ -179,3 +256,28 @@ services/*
 2. Export handler function
 3. Add command definition to `src/commands/register.js`
 4. Add route in `src/events/interactionCreate.js`
+
+## Configuration
+
+### config.json
+```json
+{
+  "openDays": ["Tuesday", "Friday", "Saturday", "Sunday"],
+  "eventCreatorRoles": ["Owner", "Head Manager", "Manager"],
+  "timezone": "America/New_York",
+  "autoPostHour": 0,
+  "shiftStartHour": 21
+}
+```
+
+- **openDays**: Days when the bar is open (shifts will only be created for these days)
+- **eventCreatorRoles**: Roles allowed to manually create/manage events
+- **timezone**: Timezone for all date/time operations
+- **autoPostHour**: Hour (0-23) when weekly schedule data is generated (0 = midnight)
+- **shiftStartHour**: Hour (0-23) when shifts begin each day (21 = 9 PM)
+
+### Automated Schedule
+
+- **Monday 00:00** - Generate event data for the week
+- **Daily 16:00 (4 PM EST)** - Post scheduled events to Discord
+- **Every 10 minutes** - Check if schedule generation or posting is needed
