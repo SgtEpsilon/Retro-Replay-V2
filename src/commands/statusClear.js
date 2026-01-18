@@ -1,15 +1,19 @@
-const { hasEventPermission, setDefaultStatus } = require('../utils/helpers');
+const { hasEventPermission } = require('../utils/helpers');
 const { setCustomStatus } = require('../utils/storage');
+const { resumeCycle } = require('../utils/statusManager');
 
 async function statusClearHandler(i) {
   if (!hasEventPermission(i.member))
     return await i.reply({ content: '❌ No permission.', ephemeral: true });
 
+  // Clear stored custom status
   setCustomStatus(null);
-  setDefaultStatus(i.client);
+
+  // 🔄 Resume automatic preset cycling
+  resumeCycle(i.client);
 
   return await i.reply({
-    content: '✅ Custom status cleared, reverted to default.',
+    content: '✅ Custom status cleared, resumed automatic status cycle.',
     ephemeral: true
   });
 }

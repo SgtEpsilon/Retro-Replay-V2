@@ -4,70 +4,87 @@ const { config } = require('../utils/constants');
 async function helpHandler(i) {
   const helpEmbed = new EmbedBuilder()
     .setColor(0x00b0f4)
-    .setTitle('🍸 Retro Replay Bot - Command List')
-    .setDescription('Here are all available commands:')
+    .setTitle('🍸 Retro Replay Bot – Command List')
+    .setDescription('Below is a list of all available commands and what they do.')
     .addFields(
       {
         name: '📋 User Commands',
         value: [
-          '`/mysignups` - View your upcoming shift signups',
-          '`/nextshift` - View the next upcoming shift',
-          '`/areweopen` - Check if the bar is open today',
-          '`/refresh <messageid>` - Refresh a shift signup embed',
-          '`/help` - Display this help message'
+          '`/mysignups` – View all shifts you are signed up for',
+          '`/nextshift` – View the next upcoming shift',
+          '`/areweopen` – Check if the venue is open today',
+          '`/help` – Display this help message'
         ].join('\n'),
         inline: false
       },
       {
-        name: '⚙️ Event Management Commands',
+        name: '📅 Event & Schedule Commands',
         value: [
-          '`/createevent` - Create a new shift event (opens modal)',
-          '`/cancelevent <messageid>` - Cancel a scheduled event',
-          '`/editeventtime <messageid> <datetime>` - Edit event start time (DD-MM-YYYY h:mm AM/PM)',
-          '`/repost` - Repost the latest upcoming shift (deletes old post)'
+          '`/createevent` – Create a new shift event (opens modal)',
+          '`/cancelevent <messageId>` – Cancel an existing event',
+          '`/editeventtime <messageId> <date/time>` – Edit event start time (DD-MM-YYYY h:mm AM/PM)',
+          '`/repost` – Repost the next upcoming shift signup',
+          '`/post` – Manually post scheduled events',
+          '`/generate` – Generate the weekly schedule',
+          '`/weeklyschedule` – View the current weekly schedule',
+          '`/refresh <messageId>` – Refresh a signup embed'
         ].join('\n'),
         inline: false
       },
       {
         name: '👥 Role Management Commands',
         value: [
-          '`/enable <role>` - Enable a role for signups',
-          '`/disable <role>` - Disable a role for signups'
+          '`/enable <role>` – Enable a role for backup alerts',
+          '`/disable <role>` – Disable a role from backup alerts'
         ].join('\n'),
         inline: false
       },
       {
         name: '🚫 Blackout Date Commands',
         value: [
-          '`/addblackout <date>` - Add a blackout date (YYYY-MM-DD format, prevents auto-posting)',
-          '`/removeblackout <date>` - Remove a blackout date (YYYY-MM-DD format)',
-          '`/listblackouts` - List all blackout dates'
+          '`/blackout add <date>` – Add a blackout date (YYYY-MM-DD)',
+          '`/blackout remove <date>` – Remove a blackout date',
+          '`/blackout list` – List all blackout dates'
         ].join('\n'),
         inline: false
       },
       {
         name: '🤖 Bot Status Commands',
         value: [
-          '`/setstatus <status> [type]` - Set a custom bot status',
-          '`/statusclear` - Clear custom status and revert to default'
+          '`/setstatus <text> [type]` – Set a custom bot status',
+          '`/statusclear` – Clear custom status and resume rotation',
+          '`/statusreload` – Reload rotating status presets'
         ].join('\n'),
         inline: false
       },
       {
-        name: '📝 How to Sign Up',
-        value: 'React with the appropriate emoji on shift posts:\n1️⃣ Active Manager\n2️⃣ Backup Manager\n3️⃣ Bouncer\n4️⃣ Bartender\n5️⃣ Dancer\n6️⃣ DJ',
+        name: '📝 How to Sign Up for Shifts',
+        value: [
+          'React to the shift post with the corresponding emoji:',
+          '1️⃣ Active Manager',
+          '2️⃣ Backup Manager',
+          '3️⃣ Bouncer',
+          '4️⃣ Bartender',
+          '5️⃣ Dancer',
+          '6️⃣ DJ'
+        ].join('\n'),
         inline: false
       },
       {
         name: '🔐 Permission Requirements',
-        value: `Management commands require one of these roles: **${config.eventCreatorRoles.join(', ')}**`,
+        value: `Management commands require one of the following roles:\n**${config.eventCreatorRoles.join(', ')}**`,
         inline: false
       }
     )
-    .setFooter({ text: 'Bot automatically posts shifts on configured open days at the scheduled time' })
+    .setFooter({
+      text: 'Retro Replay Bot • Stable Release V1.0.3'
+    })
     .setTimestamp();
 
-  return await i.reply({ embeds: [helpEmbed], ephemeral: true });
+  return await i.reply({
+    embeds: [helpEmbed],
+    ephemeral: true
+  });
 }
 
 module.exports = helpHandler;

@@ -1,13 +1,22 @@
-# Retro Replay Bot V1.0.2 - Modularized Structure
+# Retro Replay Bot V1.1.0 – Modularized Structure (Updated)
 
-## 🛡️ What's New in V1.0.2
+## 🆕 What’s New in V1.1.0
 
-**Enterprise-Grade Data Protection:**
-- All files now use atomic writes with automatic backups
-- `.backup` files created automatically for all data files
-- Live reference system ensures data consistency
-- Immediate persistence for all operations
-- Graceful shutdown with complete data preservation
+**Status System Improvements (Non Time-Based)**
+
+* Centralized `statusManager` (single source of truth)
+* Rotating preset bot statuses (static cycle)
+* Easy-to-edit preset file (no logic mixed with content)
+* Manual status override with safe pause / resume
+* Hot-reload of status presets (`/statusreload`)
+
+**Backup Alert Reliability Fixes**
+
+* Disabled roles are now sourced **exclusively** from `disabled_roles.json`
+* Backup alerts schedule for **newly created events** (not just startup)
+* Fixed silent failures caused by invalid imports
+
+All existing **🛡️ data-protection guarantees remain unchanged**.
 
 ---
 
@@ -15,331 +24,130 @@
 
 ```
 retro-replay-bot/
-├── index.js                          # 🛡️ Main entry point with graceful shutdown & auto-save
+├── index.js                          # 🛡️ Main entry point + status init + alert scheduling
 ├── config.json                       # Bot configuration
 ├── .env                              # Environment variables (KEEP SECRET!)
 ├── package.json                      # Dependencies
 │
 ├── scheduled_events.json             # 🛡️ Event data storage (atomic writes)
-├── scheduled_events.json.backup      # 🛡️ AUTO-GENERATED: Event backup
-├── auto_posted.json                  # 🛡️ Auto-post tracking (atomic writes)
-├── auto_posted.json.backup           # 🛡️ AUTO-GENERATED: Auto-post backup
-├── blackout_dates.json               # 🛡️ Blackout dates (atomic writes)
-├── blackout_dates.json.backup        # 🛡️ AUTO-GENERATED: Blackout backup
-├── shift_logs.json                   # 🛡️ Shift history (atomic writes)
-├── shift_logs.json.backup            # 🛡️ AUTO-GENERATED: Shift log backup
-├── disabled_roles.json               # 🛡️ Disabled roles (atomic writes)
-├── disabled_roles.json.backup        # 🛡️ AUTO-GENERATED: Disabled roles backup
+├── scheduled_events.json.backup      # 🛡️ AUTO-GENERATED
+├── auto_posted.json                  # 🛡️ Auto-post tracking
+├── auto_posted.json.backup
+├── blackout_dates.json               # 🛡️ Blackout dates
+├── blackout_dates.json.backup
+├── shift_logs.json                   # 🛡️ Shift history
+├── shift_logs.json.backup
+├── disabled_roles.json               # 🛡️ Disabled roles (SOURCE OF TRUTH)
+├── disabled_roles.json.backup
 │
 └── src/
     ├── client.js                     # Discord client initialization
     │
     ├── utils/
-    │   ├── constants.js              # Configuration constants
-    │   ├── storage.js                # 🛡️ HARDENED: Atomic writes, backups, live references
-    │   └── helpers.js                # Helper functions
+    │   ├── constants.js              # Role config, env exports, file paths
+    │   ├── storage.js                # 🛡️ Atomic writes, backups, live references
+    │   ├── helpers.js                # Permissions, formatting, embeds
+    │   ├── statusManager.js          # ⭐ Central status controller (static cycling)
+    │   └── statusPresets.js          # ⭐ Easy-to-edit rotating status presets
     │
     ├── services/
-    │   ├── autoPost.js               # 🛡️ Auto-posting service (immediate persistence)
-    │   └── backupAlert.js            # Backup alert service
+    │   ├── autoPost.js               # 🛡️ Weekly schedule generation & posting
+    │   └── backupAlert.js            # 🛡️ Backup pings (fixed disabled role logic)
     │
     ├── commands/
-    │   ├── register.js               # Command registration
-    │   ├── createEvent.js            # 🛡️ /createevent (save validation & rollback)
-    │   ├── mySignups.js              # 🛡️ /mysignups (live references)
-    │   ├── nextShift.js              # 🛡️ /nextshift (live references)
-    │   ├── weeklySchedule.js         # 🛡️ /weeklyschedule (live references)
-    │   ├── generate.js               # 🛡️ /generate (live references)
-    │   ├── post.js                   # 🛡️ /post (atomic saves)
-    │   ├── areWeOpen.js              # /areweopen
-    │   ├── cancelEvent.js            # 🛡️ /cancelevent (immediate persistence)
-    │   ├── editEventTime.js          # 🛡️ /editeventtime (save validation & rollback)
-    │   ├── setStatus.js              # /setstatus
-    │   ├── statusClear.js            # /statusclear
-    │   ├── blackout.js               # /addblackout, /removeblackout, /listblackouts
-    │   ├── roleManagement.js         # /enable, /disable
-    │   ├── help.js                   # /help
-    │   ├── refresh.js                # 🛡️ /refresh (live references)
-    │   └── repost.js                 # 🛡️ /repost (atomic saves)
+    │   ├── register.js
+    │   ├── createEvent.js            # 🛡️ Schedules reminders + backup alerts
+    │   ├── setStatus.js              # Manual status override (pauses cycling)
+    │   ├── statusClear.js            # Clears override (resumes cycling)
+    │   ├── statusReload.js           # ⭐ Hot-reloads status presets
+    │   ├── mySignups.js
+    │   ├── nextShift.js
+    │   ├── weeklySchedule.js
+    │   ├── generate.js
+    │   ├── post.js
+    │   ├── areWeOpen.js
+    │   ├── cancelEvent.js
+    │   ├── editEventTime.js
+    │   ├── blackout.js
+    │   ├── roleManagement.js         # /enable, /disable (writes disabled_roles.json)
+    │   ├── help.js
+    │   ├── refresh.js
+    │   └── repost.js
     │
     └── events/
-        ├── interactionCreate.js      # Command routing
-        ├── reactionAdd.js            # 🛡️ Reaction handler (instant signup persistence)
-        └── reactionRemove.js         # 🛡️ Reaction handler (instant removal persistence)
+        ├── interactionCreate.js      # Command + modal routing
+        ├── reactionAdd.js             # 🛡️ Signup persistence
+        └── reactionRemove.js          # 🛡️ Unsignup persistence
 ```
 
 ---
 
-## Module Descriptions
+## ⭐ Status System (Current Architecture)
 
-### Core Files
+### Runtime Flow
 
-**index.js** 🛡️
-- Application entry point
-- Initializes bot and loads all modules
-- Registers event handlers
-- Starts auto-post scheduler
-- **NEW**: Graceful shutdown handlers (SIGINT, SIGTERM)
-- **NEW**: Auto-save system (every 5 minutes)
-- **NEW**: Uncaught exception handling with data save
-- **NEW**: Uses live reference getters from storage.js
+```
+Bot Startup
+↓
+initStatus(client)
+├─ Custom status saved?
+│   └─ YES → Restore + pause cycling
+└─ NO → Start rotating preset cycle
+```
 
-**config.json**
-- Open days configuration (days the bar is open)
-- Event creator roles (permissions for manual event management)
-- Timezone settings
-- Auto-post hour (when to generate weekly schedule)
-- Shift start hour (what time shifts begin)
+### Key Files
 
-**src/client.js**
-- Creates and exports Discord client instance
-- Configures intents and partials
+**statusManager.js**
 
----
+* Single interval controller (no duplicates)
+* `initStatus`, `pauseCycle`, `resumeCycle`
+* Preset hot-reload support
 
-### Utils
+**statusPresets.js**
 
-**src/utils/constants.js**
-- Centralized configuration
-- Environment variable exports
-- Role configuration
-- File paths
-
-**src/utils/storage.js** 🛡️ **COMPLETELY REWRITTEN**
-- **Atomic file writes** - Write to `.tmp` files first, then rename
-- **Automatic backups** - Creates `.backup` files before every save
-- **Backup recovery** - Auto-restores from backup if main file corrupted
-- **Live reference system** - Exports getter functions instead of static objects:
-  - `getEvents()` - Returns live reference to events
-  - `getAutoPosted()` - Returns live reference to auto-posted tracking
-  - `getBlackoutDates()` - Returns live reference to blackout dates
-  - `getShiftLogs()` - Returns live reference to shift logs
-  - `getDisabledRoles()` - Returns live reference to disabled roles
-- **Save validation** - All save functions return success/failure status
-- **Emergency save** - `saveAll()` function saves all data files at once
-- **Error logging** - Detailed console output for troubleshooting
-- Timer management (reminders, alerts)
-- CRUD operations for events
-
-**src/utils/helpers.js**
-- Permission checking (`hasEventPermission`)
-- Time formatting
-- Blackout date validation
-- Embed building
-- Status management
-
----
-
-### Services
-
-**src/services/autoPost.js** 🛡️
-- **Weekly schedule data generation** - Creates event data for the entire week (Monday 00:00)
-- **Scheduled event posting** - Posts scheduled events to Discord (Daily 4 PM EST)
-- **Open day filtering** - Only creates shifts for days in config.json openDays
-- **Hourly checks** - Verifies schedule exists, generates if missing, posts scheduled events
-- Duplicate detection
-- Blackout date validation
-- **NEW**: Uses live reference getters (`getEvents()`, `getAutoPosted()`)
-- **NEW**: Immediate save after schedule generation with validation
-- **NEW**: Immediate save after posting events with validation
-- **NEW**: Returns event count for verification
-- **NEW**: Detailed logging of all operations
-
-**src/services/backupAlert.js**
-- Backup position alerts
-- Role mention logic
-- Multi-tier alerting (2hr, 5min, start)
-
----
+* Human-editable rotating statuses
+* No Discord enums or logic
 
 ### Commands
 
-Each command file exports a handler function or object. **V1.0.2 changes marked with 🛡️**
-
-**createEvent.js** 🛡️
-- Modal-based event creation (saves as scheduled, not posted immediately)
-- **NEW**: Uses `getEvents()` for live reference
-- **NEW**: Immediate save after creation with validation
-- **NEW**: Rollback on save failure
-- **NEW**: User notification on save failure
-- **NEW**: Detailed logging of created events
-
-**mySignups.js** 🛡️
-- User signup lookup
-- **NEW**: Uses `getEvents()` for live reference
-- **UPDATED**: Now reads from live data ensuring accurate signup display
-
-**nextShift.js** 🛡️
-- Next shift display
-- **NEW**: Uses `getEvents()` for live reference
-- **FIXED**: Removed duplicate declaration error
-
-**weeklySchedule.js** 🛡️
-- View all events for the next 7 days (shows both scheduled and posted)
-- **NEW**: Uses `getEvents()` for live reference
-- **UPDATED**: Displays live event data with accurate status
-
-**generate.js** 🛡️
-- Manually generate weekly schedule data (saves to scheduled_events.json)
-- **NEW**: Uses `getEvents()` for live reference in all helper functions
-- **UPDATED**: Shows accurate event counts and status
-
-**post.js** 🛡️
-- Manually post scheduled events to Discord (interactive select menu, restricted to eventCreatorRoles)
-- **NEW**: Uses `getEvents()` for live reference
-- **NEW**: Immediate save after posting with validation
-- **NEW**: Batch save optimization for "Post All"
-- **NEW**: User notification on save failure
-- **NEW**: Detailed logging with message IDs
-
-**areWeOpen.js**
-- Open day checker
-
-**cancelEvent.js** 🛡️
-- Event cancellation
-- **NEW**: Uses `getEvents()` for live reference
-- **NEW**: Immediate save after cancellation with validation
-- **NEW**: User notification on save failure
-- **NEW**: Component cleanup (removes buttons)
-- **NEW**: Detailed logging
-
-**editEventTime.js** 🛡️
-- Time editing
-- **NEW**: Uses `getEvents()` for live reference
-- **NEW**: Immediate save after edit with validation
-- **NEW**: Rollback on save failure (reverts to old time)
-- **NEW**: User notification on save failure
-- **NEW**: Detailed logging showing old and new times
-
-**setStatus.js**
-- Custom bot status
-
-**statusClear.js**
-- Reset to default status
-
-**blackout.js**
-- Blackout date management
-
-**roleManagement.js**
-- Enable/disable roles
-
-**help.js**
-- Command documentation
-
-**refresh.js** 🛡️
-- Embed refresh
-- **NEW**: Uses `getEvents()` for live reference
-- **FIXED**: Removed duplicate declaration error
-
-**repost.js** 🛡️
-- Event reposting (only works with posted events, restricted to eventCreatorRoles)
-- **NEW**: Uses `getEvents()` for live reference
-- **NEW**: Immediate save after reposting with validation
-- **NEW**: User notification on save failure
-- **NEW**: Detailed logging showing old and new message IDs
+* `/setstatus` → pause cycling, manual override
+* `/statusclear` → resume preset cycling
+* `/statusreload` → reload presets without restart
 
 ---
 
-### Events
+## 🛡️ Backup Alert System (Fixed)
 
-**interactionCreate.js**
-- Routes slash commands to handlers
-- Handles modals
-- Error handling
+* Disabled roles loaded **only** via `getDisabledRoles()`
+* Source of truth: `disabled_roles.json`
+* Alerts schedule:
 
-**reactionAdd.js** 🛡️
-- Signup reaction handling
-- Role conflict resolution
-- Disabled role checking
-- **NEW**: Uses `getEvents()` and `getDisabledRoles()` for live references
-- **NEW**: Immediate save after signup with validation
-- **NEW**: User DM notification on save failure
-- **NEW**: Detailed error logging with context
-- **NEW**: Embed update doesn't fail operation if save succeeded
-
-**reactionRemove.js** 🛡️
-- Unsignup reaction handling
-- Embed updates
-- **NEW**: Uses `getEvents()` for live reference
-- **NEW**: Immediate save after removal with validation
-- **NEW**: User DM notification on save failure
-- **NEW**: Detailed error logging with context
-- **NEW**: Embed update doesn't fail operation if save succeeded
+  * On bot startup
+  * On `/createevent`
+* No silent failures from bad imports
 
 ---
 
-## 🛡️ Data Protection Architecture
+## 🛡️ Data Protection Architecture (Unchanged)
 
-### How Data is Protected
+All V1.0.2 guarantees still apply:
 
-```
-User Action (e.g., signup)
-    ↓
-Update in-memory object (e.g., events[id].signups)
-    ↓
-saveEvents() called immediately
-    ↓
-Write to scheduled_events.json.tmp (temporary file)
-    ↓
-Copy scheduled_events.json → scheduled_events.json.backup
-    ↓
-Rename scheduled_events.json.tmp → scheduled_events.json (atomic)
-    ↓
-Return success/failure status
-    ↓
-On failure: Rollback in-memory changes, notify user
-On success: Operation complete, data persisted
-```
-
-### Recovery Process
-
-```
-Bot starts
-    ↓
-Load scheduled_events.json
-    ↓
-Parse JSON
-    ↓
-Success? → Use data
-    ↓
-Failure? → Load scheduled_events.json.backup
-    ↓
-Parse backup JSON
-    ↓
-Success? → Restore from backup, replace main file
-    ↓
-Failure? → Use fallback (empty object), log error
-```
-
-### Graceful Shutdown
-
-```
-User presses Ctrl+C (SIGINT)
-    ↓
-Bot receives signal
-    ↓
-saveAll() called
-    ↓
-Save all data files atomically with backups
-    ↓
-Destroy Discord client
-    ↓
-Exit process cleanly
-```
+* Atomic writes
+* Automatic backups
+* Live references
+* Rollback on failure
+* Graceful shutdown with `saveAll()`
 
 ---
 
-## Benefits of This Structure
+## Summary of Benefits
 
-1. **Separation of Concerns**: Each module has a single, clear responsibility
-2. **Maintainability**: Easy to locate and modify specific functionality
-3. **Testability**: Individual modules can be tested in isolation
-4. **Scalability**: New commands/features can be added without touching existing code
-5. **Readability**: Smaller files are easier to understand and navigate
-6. **Reusability**: Utility functions can be shared across commands
-7. **🛡️ Data Integrity**: Atomic writes prevent corruption
-8. **🛡️ Disaster Recovery**: Automatic backups enable instant recovery
-9. **🛡️ Zero Data Loss**: Immediate persistence ensures no lost changes
-10. **🛡️ Error Transparency**: Users and admins notified of save failures
+1. **Clean status system** – predictable rotating presets
+2. **Zero-conflict timers** – one status interval, one source of truth
+3. **Live-editable presets** – no restarts required
+4. **Reliable backup alerts** – disabled roles respected correctly
+5. **Future-proof** – time-based or event-based statuses can be added later
 
 ---
+
+✅ **Project structure updated to remove time-based status logic while preserving all fixes.**
