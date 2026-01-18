@@ -15,7 +15,7 @@ const activityMap = {
 };
 
 function setStatus(client, preset) {
-    if (!preset) return;
+    if (!preset || !client.user) return;
 
     client.user.setActivity({
         name: preset.text,
@@ -23,10 +23,26 @@ function setStatus(client, preset) {
     });
 }
 
+/* ─────────────────────────────────────────────── */
+/* Cycle Control                                   */
+/* ─────────────────────────────────────────────── */
+
+function stopStatusCycle() {
+    if (interval) {
+        clearInterval(interval);
+        interval = null;
+    }
+}
+
 function startStatusCycle(client) {
-    if (!cyclingEnabled || presets.length === 0) return;
+    if (!cyclingEnabled) return;
 
     stopStatusCycle();
+
+    if (!presets.length) {
+        console.warn("⚠️ No status presets found");
+        return;
+    }
 
     index = 0;
     setStatus(client, presets[index]);
@@ -37,30 +53,37 @@ function startStatusCycle(client) {
     }, 30_000);
 }
 
-function stopStatusCycle() {
-    if (interval) {
-        clearInterval(interval);
-        interval = null;
-    }
-}
-
 function pauseCycle() {
     cyclingEnabled = false;
     stopStatusCycle();
 }
 
+/* ─────────────────────────────────────────────── */
+/* 🔄 HARD RELOAD (used by /statusreload)          */
+/* ─────────────────────────────────────────────── */
+
 function resumeCycle(client) {
     cyclingEnabled = true;
 
-    // Reload presets in case they changed
+    // Fully reload presets
     delete require.cache[require.resolve("./statusPresets")];
     presets = require("./statusPresets");
 
+    index = 0;
+    stopStatusCycle();
     startStatusCycle(client);
+
+    console.log("🔄 Status presets reloaded and cycle restarted");
 }
+
+/* ─────────────────────────────────────────────── */
+/* Init on startup                                 */
+/* ─────────────────────────────────────────────── */
 
 function initStatus(client) {
     const saved = getCustomStatus();
+
+    stopStatusCycle();
 
     if (saved) {
         cyclingEnabled = false;
