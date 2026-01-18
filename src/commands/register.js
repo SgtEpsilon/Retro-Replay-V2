@@ -22,7 +22,10 @@ const commands = [
     .setName('cancelevent')
     .setDescription('Cancel an event')
     .addStringOption(o =>
-      o.setName('messageid').setDescription('Event message ID').setRequired(true)),
+      o.setName('messageid')
+        .setDescription('Event message ID')
+        .setRequired(true)
+    ),
 
   new SlashCommandBuilder()
     .setName('editeventtime')
@@ -30,11 +33,13 @@ const commands = [
     .addStringOption(o =>
       o.setName('messageid')
         .setDescription('Event message ID')
-        .setRequired(true))
+        .setRequired(true)
+    )
     .addStringOption(o =>
       o.setName('datetime')
         .setDescription('DD-MM-YYYY h:mm AM/PM')
-        .setRequired(true)),
+        .setRequired(true)
+    ),
 
   new SlashCommandBuilder()
     .setName('setstatus')
@@ -42,7 +47,8 @@ const commands = [
     .addStringOption(o =>
       o.setName('status')
         .setDescription('Status text')
-        .setRequired(true))
+        .setRequired(true)
+    )
     .addStringOption(o =>
       o.setName('type')
         .setDescription('Activity type')
@@ -51,11 +57,17 @@ const commands = [
           { name: 'Watching', value: 'Watching' },
           { name: 'Listening', value: 'Listening' },
           { name: 'Competing', value: 'Competing' }
-        )),
+        )
+    ),
 
   new SlashCommandBuilder()
     .setName('statusclear')
     .setDescription('Clear custom status and return to default'),
+
+  // ✅ NEW COMMAND
+  new SlashCommandBuilder()
+    .setName('statusreload')
+    .setDescription('Reload status presets and restart the status cycle'),
 
   new SlashCommandBuilder()
     .setName('addblackout')
@@ -63,7 +75,8 @@ const commands = [
     .addStringOption(o =>
       o.setName('date')
         .setDescription('Date (MM-DD-YYYY)')
-        .setRequired(true)),
+        .setRequired(true)
+    ),
 
   new SlashCommandBuilder()
     .setName('removeblackout')
@@ -71,7 +84,8 @@ const commands = [
     .addStringOption(o =>
       o.setName('date')
         .setDescription('Date (MM-DD-YYYY)')
-        .setRequired(true)),
+        .setRequired(true)
+    ),
 
   new SlashCommandBuilder()
     .setName('listblackouts')
@@ -91,7 +105,8 @@ const commands = [
           { name: 'Bartender', value: 'Bartender' },
           { name: 'Dancer', value: 'Dancer' },
           { name: 'DJ', value: 'DJ' }
-        )),
+        )
+    ),
 
   new SlashCommandBuilder()
     .setName('disable')
@@ -107,7 +122,8 @@ const commands = [
           { name: 'Bartender', value: 'Bartender' },
           { name: 'Dancer', value: 'Dancer' },
           { name: 'DJ', value: 'DJ' }
-        )),
+        )
+    ),
 
   new SlashCommandBuilder()
     .setName('help')
@@ -117,17 +133,20 @@ const commands = [
     .setName('refresh')
     .setDescription('Refresh a shift signup embed')
     .addStringOption(o =>
-      o.setName('messageid').setDescription('Event message ID').setRequired(true)),
+      o.setName('messageid')
+        .setDescription('Event message ID')
+        .setRequired(true)
+    ),
 
   new SlashCommandBuilder()
     .setName('repost')
     .setDescription('Repost the latest upcoming shift event'),
 
-new SlashCommandBuilder()
+  new SlashCommandBuilder()
     .setName('weeklyschedule')
     .setDescription('View all events scheduled for the next 7 days'),
 
-new SlashCommandBuilder()
+  new SlashCommandBuilder()
     .setName('generate')
     .setDescription('Manually generate the weekly shift schedule'),
 
@@ -135,6 +154,7 @@ new SlashCommandBuilder()
     .setName('post')
     .setDescription('Post scheduled events to Discord')
 ];
+
 async function registerCommands() {
   const rest = new REST({ version: '10' }).setToken(TOKEN);
 

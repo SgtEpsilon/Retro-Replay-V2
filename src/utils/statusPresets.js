@@ -28,8 +28,4 @@ module.exports = [
 		text: "I may be drunk, Miss, but in the morning I will be sober and you will still be ugly.",
 		type: "Competing"
 	},
-    {
-        text: "/help for commands",
-        type: "Listening"
-    }
 ];
