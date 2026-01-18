@@ -22,6 +22,10 @@ const { initStatus } = require('./src/utils/statusManager');
 const { DateTime } = require('luxon');
 const config = require('./config.json');
 
+// Entertainment bot modules
+const TwitchMonitor = require('./src/modules/twitch');
+const YouTubeMonitor = require('./src/modules/youtube');
+
 require('./src/events/interactionCreate');
 require('./src/events/reactionAdd');
 require('./src/events/reactionRemove');
@@ -30,27 +34,58 @@ registerCommands();
 
 let autoSaveInterval;
 
+// Initialize entertainment monitors (will be passed to commands)
+const monitors = {
+  twitchMonitor: null,
+  youtubeMonitor: null
+};
+
+// Export monitors so commands can access them
+global.monitors = monitors;
+
 client.once('ready', async () => {
   loadData();
   const events = getEvents();
 
   console.log(`✅ Logged in as ${client.user.tag}`);
 
+  // Verify channel access for Retro Replay features
   await verifyChannelAccess();
+  
+  // Initialize status system
   initStatus(client);
 
+  // Schedule reminders and backup alerts for existing events
   for (const id of Object.keys(events)) {
     scheduleReminder(id, client);
     scheduleBackupAlert(id, client);
   }
 
+  // Schedule auto-post for weekly schedules
   scheduleAutoPost(client);
 
+  // Initialize entertainment bot monitors
+  try {
+    console.log('🎬 Initializing entertainment monitors...');
+    
+    monitors.twitchMonitor = new TwitchMonitor(client, config);
+    monitors.youtubeMonitor = new YouTubeMonitor(client, config);
+    
+    monitors.twitchMonitor.start();
+    monitors.youtubeMonitor.start();
+    
+    console.log('✅ Entertainment monitors started');
+  } catch (error) {
+    console.error('❌ Error initializing entertainment monitors:', error);
+  }
+
+  // Auto-save interval for data protection
   autoSaveInterval = setInterval(() => {
     const { saveAll } = require('./src/utils/storage');
     saveAll();
   }, 300000);
 
+  // Delayed startup tasks
   setTimeout(async () => {
     await checkAndGenerateSchedule(client);
     await checkAndPostScheduledEvents(client);
@@ -83,6 +118,17 @@ async function gracefulShutdown() {
   // Clear the auto-save interval
   if (autoSaveInterval) {
     clearInterval(autoSaveInterval);
+  }
+
+  // Stop entertainment monitors
+  if (monitors.twitchMonitor) {
+    console.log('🛑 Stopping Twitch monitor...');
+    monitors.twitchMonitor.stop();
+  }
+  
+  if (monitors.youtubeMonitor) {
+    console.log('🛑 Stopping YouTube monitor...');
+    monitors.youtubeMonitor.stop();
   }
 
   // Perform final save

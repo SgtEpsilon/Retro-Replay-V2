@@ -7,5 +7,6 @@
   ],
   "timezone": "America/New_York",
   "autoPostHour": 17,
-  "shiftStartHour": 21
+  "shiftStartHour": 21,
+  "guilds": {}
 }
