@@ -16,8 +16,10 @@ async function nextShiftHandler(i) {
   }
 
   const next = upcoming[0];
+  const unixTimestamp = Math.floor(next.datetime / 1000);
+  
   return await i.reply({
-    content: `🔜 **Next Shift:**\n${next.title}\n🕒 ${formatTime(next.datetime)}`,
+    content: `🔜 **Next Shift:**\n${next.title}\n🕒 ${formatTime(next.datetime)}\n⏰ <t:${unixTimestamp}:F> (<t:${unixTimestamp}:R>)`,
     ephemeral: true
   });
 }
