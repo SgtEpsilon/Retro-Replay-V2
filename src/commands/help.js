@@ -51,9 +51,9 @@ async function helpHandler(i) {
       {
         name: '🤖 Bot Status Commands',
         value: [
-          '`/setstatus <text> [type]` – Set a custom bot status',
+          '`/setstatus <text> [type]` – Set a custom bot status (pauses rotation)',
           '`/statusclear` – Clear custom status and resume rotation',
-          '`/statusreload` – Reload rotating status presets'
+          '`/statusreload` – Hot-reload rotating status presets'
         ].join('\n'),
         inline: false
       },
@@ -77,7 +77,7 @@ async function helpHandler(i) {
       }
     )
     .setFooter({
-      text: 'Retro Replay Bot • Stable Release V1.0.3'
+      text: 'Retro Replay Bot • V1.0.4 – Modularized Status System'
     })
     .setTimestamp();
 
