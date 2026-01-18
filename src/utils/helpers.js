@@ -87,6 +87,5 @@ module.exports = {
   formatTime,
   isBlackoutDate,
   createEventEmbed,
-  setDefaultStatus,
   setCustomStatus
 };
